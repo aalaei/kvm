@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"os/exec"
 
 	"kvm/internal/logging"
 
@@ -160,6 +161,14 @@ func setupRouter() *gin.Engine {
 		protected.POST("/storage/upload", handleUploadHttp)
 		protected.GET("/storage/download", handleDownloadHttp)
 		protected.GET("/storage/sd-download", handleSDDownloadHttp)
+	}
+
+	// API endpoints for external integrations (protected via Basic Auth)
+	apiRouter := r.Group("/api")
+	apiRouter.Use(basicAuthProtectedMiddleware(false))
+	{
+		apiRouter.GET("/ha/state", handleHomeAssistantState)
+		apiRouter.GET("/ha/snapshot", handleHomeAssistantSnapshot)
 	}
 
 	// Catch-all route for SPA
@@ -666,6 +675,58 @@ func handleDeviceStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// handleHomeAssistantState returns a compact JSON payload useful for Home Assistant integrations.
+// Protected by basic auth (use any username and the device password as password).
+func handleHomeAssistantState(c *gin.Context) {
+	networkState := rpcGetNetworkState()
+	usbState := rpcGetUSBState()
+	ota := otaState
+	resp := gin.H{
+		"device_id":             GetDeviceID(),
+		"is_setup":              config.LocalAuthMode != "",
+		"loopback_only":         config.LocalLoopbackOnly,
+		"network":               networkState,
+		"usb_state":             usbState,
+		"ota_state":             ota,
+		"stream_quality_factor": streamFactor,
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// handleHomeAssistantSnapshot returns a single JPEG snapshot extracted from the recent H264 stream
+// Requires `ffmpeg` to be installed on the device. Protected by basic auth (use any username and the device password as password).
+func handleHomeAssistantSnapshot(c *gin.Context) {
+	// Ensure ffmpeg exists
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "ffmpeg not available on device"})
+		return
+	}
+
+	buf := GetLastVideoBuffer()
+	if len(buf) == 0 {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no video data available"})
+		return
+	}
+
+	// Run ffmpeg to decode the H264 fragment into a single JPEG frame
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "h264", "-i", "pipe:0", "-frames:v", "1", "-f", "mjpeg", "pipe:1")
+	cmd.Stdin = bytes.NewReader(buf)
+	out, err := cmd.Output()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode video frame", "detail": err.Error()})
+		return
+	}
+
+	if len(out) == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no image produced"})
+		return
+	}
+
+	c.Data(http.StatusOK, "image/jpeg", out)
 }
 
 func handleDeviceUIConfig(c *gin.Context) {

@@ -105,6 +105,19 @@ var videoSocketListener net.Listener     //nolint:unused
 
 var ctrlClientConnected = make(chan struct{})
 
+// last video frame buffer for snapshot extraction
+var lastVideoMutex sync.Mutex
+var lastVideoBuf []byte
+const maxVideoBufSize = 1 * 1024 * 1024 // keep up to 1MB of recent H264 stream
+
+func GetLastVideoBuffer() []byte {
+	lastVideoMutex.Lock()
+	defer lastVideoMutex.Unlock()
+	buf := make([]byte, len(lastVideoBuf))
+	copy(buf, lastVideoBuf)
+	return buf
+}
+
 func waitCtrlClientConnected() {
 	<-ctrlClientConnected
 }
@@ -238,6 +251,18 @@ func handleVideoClient(conn net.Conn) {
 		now := time.Now()
 		sinceLastFrame := now.Sub(lastFrame)
 		lastFrame = now
+		// Append to rolling buffer for snapshot extraction
+		lastVideoMutex.Lock()
+		lastVideoBuf = append(lastVideoBuf, inboundPacket[:n]...)
+		if len(lastVideoBuf) > maxVideoBufSize {
+			// keep only the tail
+			lastVideoBuf = lastVideoBuf[len(lastVideoBuf)-maxVideoBufSize:]
+		}
+		lastVideoMutex.Unlock()
+
+		// Parse and feed NAL units to RTSP ring/broadcaster
+		ParseAndFeedH264(inboundPacket[:n])
+
 		if currentSession != nil {
 			err := currentSession.VideoTrack.WriteSample(media.Sample{Data: inboundPacket[:n], Duration: sinceLastFrame})
 			if err != nil {

@@ -74,6 +74,9 @@ func Main() {
 	// Initialize native video socket server
 	StartVideoDataSocketServer()
 
+	// Start RTSP server (serves H264 over TCP interleaved on :8554)
+	go StartRTSPServer()
+
 	// Initialize native audio socket server
 	StartAudioCtrlSocketServer()
 
