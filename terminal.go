@@ -18,6 +18,14 @@ type TerminalSize struct {
 	Cols int `json:"cols"`
 }
 
+func terminalCommand() *exec.Cmd {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	return exec.Command(shell, "-l")
+}
+
 func handleTerminalChannel(d *webrtc.DataChannel) {
 	scopedLogger := terminalLogger.With().
 		Uint16("data_channel_id", *d.ID()).Logger()
@@ -25,7 +33,7 @@ func handleTerminalChannel(d *webrtc.DataChannel) {
 	var ptmx *os.File
 	var cmd *exec.Cmd
 	d.OnOpen(func() {
-		cmd = exec.Command("/bin/sh")
+		cmd = terminalCommand()
 		var err error
 		ptmx, err = pty.Start(cmd)
 		if err != nil {
@@ -113,7 +121,7 @@ func handleTerminalWS(c *gin.Context) {
 	}
 	defer wsCon.Close(websocket.StatusNormalClosure, "")
 
-	cmd := exec.Command("/bin/sh")
+	cmd := terminalCommand()
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		scopedLogger.Warn().Err(err).Msg("Failed to start pty")
