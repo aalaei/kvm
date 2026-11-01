@@ -1,7 +1,7 @@
 import React, { JSX } from "react";
 import clsx from "clsx";
 
-import FieldLabel from "@/components/FieldLabel";
+import FieldLabel from "@components/FieldLabel";
 import { cva } from "@/cva.config";
 
 import Card from "./Card";
@@ -77,8 +77,9 @@ export const SelectMenuBasic = React.forwardRef<HTMLSelectElement, SelectMenuPro
               // Hover
               "hover:bg-blue-50/80 active:bg-blue-100/60 disabled:hover:bg-white",
 
+
               // Dark mode
-              "dark:bg-slate-800 dark:text-white dark:hover:bg-slate-700 dark:active:bg-slate-800/60 dark:disabled:hover:bg-slate-800",
+              "dark:bg-[rgba(26,26,26,1)] dark:text-white dark:hover:bg-slate-700 dark:active:bg-slate-800/60 dark:disabled:hover:bg-slate-800",
 
               // Invalid
               "invalid:ring-2 invalid:ring-red-600 invalid:ring-offset-2",

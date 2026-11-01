@@ -38,7 +38,8 @@ const appendStatToMap = <T extends { timestamp: number }>(
 };
 
 // Constants and types
-export type AvailableSidebarViews = "connection-stats";
+export type AvailableSidebarViews = "ConsoleLogViewer" | "MacroMoreList" | "Fullscreen" | "TerminalTabsMobile" | "SettingsModal" | "ClipboardMobile" | "KeyboardPanel" | "MousePanel" | "SettingsVideo"
+  | "connection-stats" | "Clipboard" | "PowerControl" | "Macros" | "VirtualMedia" | "SharedFolders" | "UsbEpModeSelect" | "UsbStatusPanel" | "HdmiSwitch" | null;
 export type AvailableTerminalTypes = "kvm" | "serial" | "none";
 
 export interface User {
@@ -56,19 +57,29 @@ interface UIState {
   sidebarView: AvailableSidebarViews | null;
   setSidebarView: (view: AvailableSidebarViews | null) => void;
 
+  topBarView: AvailableSidebarViews | null;
+  setTopBarView: (view: AvailableSidebarViews | null) => void;
+  isAnimationComplete: boolean;
+  setIsAnimationComplete: (enabled: boolean) => void;
+
   disableVideoFocusTrap: boolean;
   setDisableVideoFocusTrap: (enabled: boolean) => void;
+  isOcrMode: boolean;
+  setOcrMode: (enabled: boolean) => void;
 
   isWakeOnLanModalVisible: boolean;
   setWakeOnLanModalVisibility: (enabled: boolean) => void;
 
   toggleSidebarView: (view: AvailableSidebarViews) => void;
+  toggleTopBarView: (view: AvailableSidebarViews) => void;
 
   isAttachedVirtualKeyboardVisible: boolean;
   setAttachedVirtualKeyboardVisibility: (enabled: boolean) => void;
 
   terminalType: AvailableTerminalTypes;
   setTerminalType: (enabled: UIState["terminalType"]) => void;
+  otherSession:boolean;
+  setOtherSession: (enabled: boolean) => void;
 }
 
 export const useUiStore = create<UIState>(set => ({
@@ -77,9 +88,15 @@ export const useUiStore = create<UIState>(set => ({
 
   sidebarView: null,
   setSidebarView: view => set({ sidebarView: view }),
+  topBarView: null,
+  setTopBarView: view => set({ topBarView: view }),
 
   disableVideoFocusTrap: false,
   setDisableVideoFocusTrap: enabled => set({ disableVideoFocusTrap: enabled }),
+  isOcrMode: false,
+  setOcrMode: enabled => set({ isOcrMode: enabled }),
+  isAnimationComplete: false,
+  setIsAnimationComplete: enabled => set({ isAnimationComplete: enabled }),
 
   isWakeOnLanModalVisible: false,
   setWakeOnLanModalVisibility: enabled => set({ isWakeOnLanModalVisible: enabled }),
@@ -87,16 +104,30 @@ export const useUiStore = create<UIState>(set => ({
   toggleSidebarView: view =>
     set(state => {
       if (state.sidebarView === view) {
-        return { sidebarView: null };
+        return { sidebarView: null , topBarView: null };
       } else {
-        return { sidebarView: view };
+        return { sidebarView: view , topBarView: null };
       }
     }),
+  toggleTopBarView: view =>
+    set(state => {
+
+      if (state.topBarView === view) {
+        return { topBarView: null,sidebarView: null };
+      } else {
+        return { topBarView: view ,sidebarView: null };
+      }
+    }),
+    otherSession:false,
+    setOtherSession: enabled => set({ otherSession: enabled }),
 
   isAttachedVirtualKeyboardVisible: true,
   setAttachedVirtualKeyboardVisibility: enabled =>
     set({ isAttachedVirtualKeyboardVisible: enabled }),
-}));
+}),
+
+
+);
 
 interface RTCState {
   peerConnection: RTCPeerConnection | null;
@@ -151,7 +182,13 @@ interface RTCState {
   appendDiskDataChannelStats: (stat: RTCDataChannelStats) => void;
 
   terminalChannel: RTCDataChannel | null;
-  setTerminalChannel: (channel: RTCDataChannel) => void;
+  setTerminalChannel: (channel: RTCDataChannel | null) => void;
+
+  kvmTerminal: RTCDataChannel | null;
+  setKvmTerminal: (channel: RTCDataChannel | null) => void;
+
+  serialConsole: RTCDataChannel | null;
+  setSerialConsole: (channel: RTCDataChannel | null) => void;
 }
 
 export const useRTCStore = create<RTCState>(set => ({
@@ -227,6 +264,11 @@ export const useRTCStore = create<RTCState>(set => ({
   // Add these new properties to the store implementation
   terminalChannel: null,
   setTerminalChannel: channel => set({ terminalChannel: channel }),
+  kvmTerminal: null,
+  setKvmTerminal: channel => set({ kvmTerminal: channel }),
+
+ serialConsole: null,
+  setSerialConsole: channel => set({ serialConsole: channel }),
 }));
 
 interface MouseMove {
@@ -348,6 +390,14 @@ interface SettingsState {
 
   overrideCtrlV: boolean;
   setOverrideCtrlV: (enabled: boolean) => void;
+  pasteShortcutEnabled: boolean;
+  setPasteShortcutEnabled: (enabled: boolean) => void;
+  pasteShortcut: string;
+  setPasteShortcut: (shortcut: string) => void;
+  ocrShortcutEnabled: boolean;
+  setOcrShortcutEnabled: (enabled: boolean) => void;
+  ocrShortcut: string;
+  setOcrShortcut: (shortcut: string) => void;
 
   // Video enhancement settings
   videoSaturation: number;
@@ -356,6 +406,9 @@ interface SettingsState {
   setVideoBrightness: (value: number) => void;
   videoContrast: number;
   setVideoContrast: (value: number) => void;
+
+  forceHttp: boolean;
+  setForceHttp: (enabled: boolean) => void;
 }
 
 export const useSettingsStore = create(
@@ -414,6 +467,14 @@ export const useSettingsStore = create(
 
       overrideCtrlV: false,
       setOverrideCtrlV: enabled => set({ overrideCtrlV: enabled }),
+      pasteShortcutEnabled: true,
+      setPasteShortcutEnabled: enabled => set({ pasteShortcutEnabled: enabled }),
+      pasteShortcut: "Ctrl+V",
+      setPasteShortcut: shortcut => set({ pasteShortcut: shortcut }),
+      ocrShortcutEnabled: true,
+      setOcrShortcutEnabled: enabled => set({ ocrShortcutEnabled: enabled }),
+      ocrShortcut: "Ctrl+C",
+      setOcrShortcut: shortcut => set({ ocrShortcut: shortcut }),
 
       // Video enhancement settings with default values (1.0 = normal)
       videoSaturation: 1.0,
@@ -422,6 +483,9 @@ export const useSettingsStore = create(
       setVideoBrightness: value => set({ videoBrightness: value }),
       videoContrast: 1.0,
       setVideoContrast: value => set({ videoContrast: value }),
+
+      forceHttp: false,
+      setForceHttp: enabled => set({ forceHttp: enabled }),
     }),
     {
       name: "settings",
@@ -522,18 +586,33 @@ export interface HidState {
   keyboardLedStateSyncAvailable: boolean;
   setKeyboardLedStateSyncAvailable: (available: boolean) => void;
 
+  keysDownState?: { modifier: number; keys: number[] };
+  setKeysDownState: (state: { modifier: number; keys: number[] }) => void;
+
   isVirtualKeyboardEnabled: boolean;
   setVirtualKeyboardEnabled: (enabled: boolean) => void;
+  allowTapToOpenVirtualKeyboard: boolean;
+  setAllowTapToOpenVirtualKeyboard: (enabled: boolean) => void;
 
   isPasteModeEnabled: boolean;
   setPasteModeEnabled: (enabled: boolean) => void;
 
   usbState: "configured" | "attached" | "not attached" | "suspended" | "addressed" | "default";
   setUsbState: (state: HidState["usbState"]) => void;
-
+  
   isReinitializingGadget: boolean;
   setIsReinitializingGadget: (reinitializing: boolean) => void;
 }
+
+export interface SerialState {
+  isConnected: boolean;
+  setIsConnected: (connected: boolean) => void;
+}
+
+export const useSerialStore = create<SerialState>(set => ({
+  isConnected: false,
+  setIsConnected: connected => set({ isConnected: connected }),
+}));
 
 export const useHidStore = create<HidState>((set, get) => ({
   activeKeys: [],
@@ -568,11 +647,16 @@ export const useHidStore = create<HidState>((set, get) => ({
     set({ keyboardLedState });
   },
 
+  keysDownState: undefined,
+  setKeysDownState: state => set({ keysDownState: state }),
+
   keyboardLedStateSyncAvailable: false,
   setKeyboardLedStateSyncAvailable: available => set({ keyboardLedStateSyncAvailable: available }),
 
   isVirtualKeyboardEnabled: false,
   setVirtualKeyboardEnabled: enabled => set({ isVirtualKeyboardEnabled: enabled }),
+  allowTapToOpenVirtualKeyboard: true,
+  setAllowTapToOpenVirtualKeyboard: enabled => set({ allowTapToOpenVirtualKeyboard: enabled }),
 
   isPasteModeEnabled: false,
   setPasteModeEnabled: enabled => set({ isPasteModeEnabled: enabled }),
@@ -580,7 +664,7 @@ export const useHidStore = create<HidState>((set, get) => ({
   // Add these new properties for USB state
   usbState: "not attached",
   setUsbState: state => set({ usbState: state }),
-
+  
   isReinitializingGadget: false,
   setIsReinitializingGadget: reinitializing => set({ isReinitializingGadget: reinitializing }),
 }));
@@ -624,6 +708,7 @@ export interface UpdateState {
     appUpdatePending: boolean;
 
     appDownloadProgress: number;
+    appDownloadSpeedBps: number;
     appDownloadFinishedAt: string | null;
 
     appVerificationProgress: number;
@@ -636,6 +721,7 @@ export interface UpdateState {
     systemUpdatePending: boolean;
 
     systemDownloadProgress: number;
+    systemDownloadSpeedBps: number;
     systemDownloadFinishedAt: string | null;
 
     systemVerificationProgress: number;
@@ -643,6 +729,13 @@ export interface UpdateState {
 
     systemUpdateProgress: number;
     systemUpdatedAt: string | null;
+
+    appSignatureMissing: boolean;
+    systemSignatureMissing: boolean;
+    appSignatureAbsent: boolean;
+    appSignatureInvalid: boolean;
+    appNoPublicKey: boolean;
+    signatureVerified: boolean;
   };
   setOtaState: (state: UpdateState["otaState"]) => void;
   setUpdateDialogHasBeenMinimized: (hasBeenMinimized: boolean) => void;
@@ -662,7 +755,15 @@ export const useUpdateStore = create<UpdateState>(set => ({
   isUpdatePending: false,
   setIsUpdatePending: isPending => set({ isUpdatePending: isPending }),
 
-  setOtaState: state => set({ otaState: state }),
+  setOtaState: state =>
+    set(current => {
+      const definedEntries = Object.entries(state).filter(([, value]) => value !== undefined);
+      const merged = {
+        ...current.otaState,
+        ...Object.fromEntries(definedEntries),
+      } as UpdateState["otaState"];
+      return { otaState: merged };
+    }),
   otaState: {
     updating: false,
     error: null,
@@ -670,10 +771,12 @@ export const useUpdateStore = create<UpdateState>(set => ({
     appUpdatePending: false,
     systemUpdatePending: false,
     appDownloadProgress: 0,
+    appDownloadSpeedBps: 0,
     appDownloadFinishedAt: null,
     appVerificationProgress: 0,
     appVerifiedAt: null,
     systemDownloadProgress: 0,
+    systemDownloadSpeedBps: 0,
     systemDownloadFinishedAt: null,
     systemVerificationProgress: 0,
     systemVerifiedAt: null,
@@ -681,6 +784,12 @@ export const useUpdateStore = create<UpdateState>(set => ({
     appUpdatedAt: null,
     systemUpdateProgress: 0,
     systemUpdatedAt: null,
+    appSignatureMissing: false,
+    systemSignatureMissing: false,
+    appSignatureAbsent: false,
+    appSignatureInvalid: false,
+    appNoPublicKey: false,
+    signatureVerified: false,
   },
 
   updateDialogHasBeenMinimized: false,
@@ -714,7 +823,7 @@ export const useUsbConfigModalStore = create<UsbConfigModalState>(set => ({
   setErrorMessage: message => set({ errorMessage: message }),
 }));
 
-interface LocalAuthModalState {
+export interface LocalAuthModalState {
   modalView:
     | "createPassword"
     | "deletePassword"
@@ -830,6 +939,9 @@ export interface IPv4StaticConfig {
 export interface NetworkSettings {
   hostname: string;
   domain: string;
+  http_proxy?: string;
+  https_proxy?: string;
+  all_proxy?: string;
   ipv4_mode: IPv4Mode;
   ipv4_request_address?: string;
   ipv4_static?: IPv4StaticConfig;
@@ -1065,3 +1177,31 @@ export const useVpnStore = create<VpnState>(set => ({
   setZeroTierIP: networkID => set({ zeroTierIP: networkID }),
 }));
 
+export interface MacrosSideState {
+  sideTitle: string;
+  setSideTitle: (title: string) => void;
+};
+
+export const useMacrosSideTitleState = create<MacrosSideState>(set => ({
+  sideTitle: "Keyboard Macros",
+  setSideTitle: title => set({ sideTitle: title }),
+}));
+
+export interface LogEntry {
+  timestamp: string;
+  level: 'log' | 'error' | 'warn' | 'info';
+  message: string;
+  originalArgs: any[];
+}
+
+export type BootStorageType = 'emmc' | 'sd' | 'unknown';
+
+interface BootStorageState {
+  bootStorageType: BootStorageType;
+  setBootStorageType: (type: BootStorageType) => void;
+}
+
+export const useBootStorageStore = create<BootStorageState>(set => ({
+  bootStorageType: 'unknown',
+  setBootStorageType: type => set({ bootStorageType: type }),
+}));

@@ -215,6 +215,16 @@ video::-webkit-media-controls {
 
 .simple-keyboard-main.simple-keyboard .hg-row:first-child {
   @apply mb-[10px];
+
+}
+.simple-keyboard-main2.simple-keyboard {
+  @apply w-full md:w-[80%];
+  background: none;
+}
+
+.simple-keyboard-main2.simple-keyboard .hg-row:first-child {
+  @apply mb-[1px];
+
 }
 
 .simple-keyboard-arrows.simple-keyboard {
@@ -223,8 +233,9 @@ video::-webkit-media-controls {
 }
 
 .simple-keyboard .hg-button.selectedButton {
-  background: rgba(5, 25, 70, 0.53);
+  background: rgba(0, 0, 0, 1);
   @apply text-white;
+
 }
 
 .simple-keyboard .hg-button.emptySpace {
@@ -240,6 +251,7 @@ video::-webkit-media-controls {
 
 .simple-keyboard-arrows .hg-button {
   @apply flex w-[50px] grow-0 items-center justify-center;
+
 }
 
 .controlArrows {
@@ -258,9 +270,9 @@ video::-webkit-media-controls {
 .controlArrows .simple-keyboard-control.simple-keyboard .hg-row:first-child {
   @apply mb-[4px] md:mb-[10px];
 }
-
+/*simple-keyboard-main simple-keyboard hg-theme-default hg-layout-default*/
 .hg-button {
-  @apply dark:bg-slate-800! dark:text-white;
+  @apply dark:bg-[rgba(0,0,0,1)]! dark:text-white;
 }
 
 .simple-keyboard-control .hg-button {
@@ -330,7 +342,7 @@ video::-webkit-media-controls {
   @apply mr-[2px]! md:mr-[5px]!;
 }
 
-/* Hide the scrollbar by setting the scrollbar color to the background color */
+/* Hide the scrollbar by SettingsModal the scrollbar color to the background color */
 .xterm .xterm-viewport {
   scrollbar-color: var(--color-gray-900) #002b36;
   scrollbar-width: thin;
@@ -344,4 +356,46 @@ video::-webkit-media-controls {
 
 .hide-scrollbar::-webkit-scrollbar {
   display: none;
+}
+.border-none {
+  border: none !important;
+}
+
+.border-0 {
+  border-width: 0 !important;
+}
+/* Dark mode scrollbar styling */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #334155; /* slate-700 */
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #94a3b8; /* slate-400 */
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #cbd5e1; /* slate-300 */
+}
+
+/* For Firefox */
+.dark * {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #334155;
+}
+
+.ant-drawer-content:focus-visible,
+.ant-drawer-content:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.ant-drawer-wrapper-body:focus-visible,
+.ant-drawer-wrapper-body:focus {
+  outline: none !important;
 }

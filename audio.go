@@ -1,9 +1,12 @@
 package kvm
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -52,6 +55,11 @@ func getNextAvailablePort() int {
 	return 0
 }
 
+var (
+	audioStreamerCmd  *exec.Cmd
+	audioStreamerLock = &sync.Mutex{}
+)
+
 func StartNtpAudioServer(handleClient func(net.Conn)) {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -84,25 +92,31 @@ func StartNtpAudioServer(handleClient func(net.Conn)) {
 		if err != nil {
 			audioLogger.Error().Err(err).Msg("failed to set audio enable")
 		}
-	} else {
-		_, err := CallAudioCtrlAction("set_audio_mode", map[string]interface{}{"audio_mode": "hdmi", "rtp_port": port})
-		if err != nil {
-			audioLogger.Error().Err(err).Msg("failed to set audio mode")
-		}
-		_, err = CallAudioCtrlAction("set_audio_enable", map[string]interface{}{"audio_enable": true})
-		if err != nil {
-			audioLogger.Error().Err(err).Msg("failed to set audio enable")
-		}
+	} else if config.AudioMode == "hdmi" {
+		// HDMI mode: use our minimal C streamer (kvm_audio_stream) which is much
+		// lighter than ffmpeg. kvm_audio's own HDMI mode uses wrong sample rate for
+		// this hardware (16kHz instead of 48kHz).
+		factor := config.AudioRateFactor
+		go func() {
+			if err := StartAudioStreamer(port, factor); err != nil {
+				audioLogger.Warn().Err(err).Msg("failed to start audio streamer")
+			}
+		}()
 	}
 
 	go handleClient(listener)
 }
 
 func StopNtpAudioServer() {
-	_, err := CallAudioCtrlAction("set_audio_enable", map[string]interface{}{"audio_enable": false})
-	if err != nil {
-		audioLogger.Error().Err(err).Msg("failed to set audio enable")
+	if config.AudioMode == "usb" {
+		_, err := CallAudioCtrlAction("set_audio_enable", map[string]interface{}{"audio_enable": false})
+		if err != nil {
+			audioLogger.Error().Err(err).Msg("failed to set audio enable")
+		}
 	}
+
+	// Stop local streamer if running
+	StopAudioStreamer()
 
 	if audioListener != nil {
 		audioListener.Close()
@@ -117,6 +131,65 @@ func StopNtpAudioServer() {
 	}
 
 	audioLogger.Info().Msg("audio server stopped")
+}
+
+// StartAudioStreamer starts a local ffmpeg process that captures HDMI audio (ALSA hw:0,0)
+// applies a rate correction factor (pitch/speed change) and sends Opus RTP to the provided port.
+func StartAudioStreamer(port int, rateFactor float64) error {
+	audioStreamerLock.Lock()
+	defer audioStreamerLock.Unlock()
+
+	// Stop existing streamer if running
+	if audioStreamerCmd != nil && audioStreamerCmd.Process != nil {
+		audioLogger.Info().Msg("stopping existing audio streamer")
+		_ = audioStreamerCmd.Process.Kill()
+		audioStreamerCmd = nil
+	}
+
+	portStr := fmt.Sprintf("%d", port)
+	rateStr := fmt.Sprintf("%.6f", rateFactor)
+	args := []string{portStr, rateStr}
+
+	audioLogger.Info().Strs("args", args).Msg("starting audio streamer (kvm_audio_stream)")
+
+	cmd := exec.Command("/userdata/picokvm/bin/kvm_audio_stream", args...)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+	cmd.Stdout = io.Discard
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
+	// log stderr output
+	go func() {
+		s := bufio.NewScanner(stderr)
+		for s.Scan() {
+			audioLogger.Debug().Str("kvm_audio_stream", s.Text()).Msg("kvm_audio_stream")
+		}
+		if err := s.Err(); err != nil {
+			audioLogger.Warn().Err(err).Msg("error reading ffmpeg stderr")
+		}
+	}()
+
+	audioStreamerCmd = cmd
+	return nil
+}
+
+// StopAudioStreamer kills the running ffmpeg streamer if present
+func StopAudioStreamer() {
+	audioStreamerLock.Lock()
+	defer audioStreamerLock.Unlock()
+
+	if audioStreamerCmd == nil || audioStreamerCmd.Process == nil {
+		return
+	}
+	audioLogger.Info().Msg("stopping audio streamer")
+	_ = audioStreamerCmd.Process.Kill()
+	_ = audioStreamerCmd.Wait()
+	audioStreamerCmd = nil
 }
 
 func handleAudioClient(conn net.Conn) {

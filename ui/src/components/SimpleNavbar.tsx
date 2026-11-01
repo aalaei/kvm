@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import React from "react";
 
-import Container from "@/components/Container";
+import Container from "@components/Container";
 import LogoLuckfox from "@/assets/logo-luckfox.png";
 
 interface Props { logoHref?: string; actionElement?: React.ReactNode }

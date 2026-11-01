@@ -1,49 +1,53 @@
+import { Switch , Button as AntdButton } from "antd";
+import { LockClosedIcon } from "@heroicons/react/16/solid";
 import { useShallow } from "zustand/react/shallow";
-import { ChevronDownIcon } from "@heroicons/react/16/solid";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Keyboard from "react-simple-keyboard";
+import { useReactAt } from "i18n-auto-extractor/react";
+import {  isMobile } from "react-device-detect";
 
 import Card from "@components/Card";
-// eslint-disable-next-line import/order
-import { Button } from "@components/Button";
-
 import "react-simple-keyboard/build/css/index.css";
 
-import AttachIconRaw from "@/assets/attach-icon.svg";
 import DetachIconRaw from "@/assets/detach-icon.svg";
 import { cx } from "@/cva.config";
 import { useHidStore, useSettingsStore, useUiStore } from "@/hooks/stores";
 import useKeyboard from "@/hooks/useKeyboard";
-import { keyDisplayMap, keys, modifiers } from "@/keyboardMappings";
-import {useReactAt} from 'i18n-auto-extractor/react'
+import useKeyboardLayout from "@/hooks/useKeyboardLayout";
+import { keyDisplayMap2, keys, modifiers, sKeyDisplayMap, latchingKeys } from "@/keyboardMappings";
+import { dark_bg2_style} from "@/layout/theme_color";
+
+import GoBottomSvg from "@/assets/second/gobottom.svg?react";
 
 export const DetachIcon = ({ className }: { className?: string }) => {
   return <img src={DetachIconRaw} alt="Detach Icon" className={className} />;
 };
 
-const AttachIcon = ({ className }: { className?: string }) => {
-  return <img src={AttachIconRaw} alt="Attach Icon" className={className} />;
-};
-
 function KeyboardWrapper() {
-  const { $at }= useReactAt();
+  const { $at } = useReactAt();
   const [layoutName, setLayoutName] = useState("default");
 
   const keyboardRef = useRef<HTMLDivElement>(null);
   const showAttachedVirtualKeyboard = useUiStore(
     state => state.isAttachedVirtualKeyboardVisible,
   );
-  const setShowAttachedVirtualKeyboard = useUiStore(
-    state => state.setAttachedVirtualKeyboardVisibility,
-  );
 
   const { sendKeyboardEvent, resetKeyboardState } = useKeyboard();
+  const { selectedKeyboard } = useKeyboardLayout();
+
+  const keyDisplayMap = useMemo(() => {
+    return selectedKeyboard.keyDisplayMap;
+  }, [selectedKeyboard]);
+
+  const virtualKeyboardLayout = useMemo(() => {
+    return selectedKeyboard.virtualKeyboard;
+  }, [selectedKeyboard]);
 
   const [isDragging, setIsDragging] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [newPosition, setNewPosition] = useState({ x: 0, y: 0 });
-
+  
   // State for locked modifier keys
   const [lockedModifiers, setLockedModifiers] = useState({
     ctrl: false,
@@ -53,7 +57,7 @@ function KeyboardWrapper() {
   });
 
   // Toggle for modifier key behavior: true = lock mode, false = direct trigger mode
-  const [modifierLockMode, setModifierLockMode] = useState(true);
+  const [modifierLockMode, setModifierLockMode] = useState(isMobile);
 
   // Clear locked modifiers when switching to direct mode
   useEffect(() => {
@@ -68,13 +72,27 @@ function KeyboardWrapper() {
     }
   }, [modifierLockMode]);
 
+  // Force sticky mode on mobile
+  useEffect(() => {
+    if (isMobile) {
+      setModifierLockMode(true);
+    }
+  }, [isMobile]);
+
+  const [useNum, setUseNum] = useState(false);
+  const [useFn, setUseFn] = useState(false);
+  const [stickyModifiers, setStickyModifiers] = useState<string[]>([]);
+  const modifierButtonTheme = useMemo(
+    () => [{ class: "hg-mod-active", buttons: stickyModifiers.join(" ") }],
+    [stickyModifiers],
+  );
   const isCapsLockActive = useHidStore(useShallow(state => state.keyboardLedState?.caps_lock));
 
   // HID related states
   const keyboardLedStateSyncAvailable = useHidStore(state => state.keyboardLedStateSyncAvailable);
   const keyboardLedSync = useSettingsStore(state => state.keyboardLedSync);
   const isKeyboardLedManagedByHost = useMemo(() =>
-    keyboardLedSync !== "browser" && keyboardLedStateSyncAvailable,
+      keyboardLedSync !== "browser" && keyboardLedStateSyncAvailable,
     [keyboardLedSync, keyboardLedStateSyncAvailable],
   );
 
@@ -150,7 +168,10 @@ function KeyboardWrapper() {
   }, [endDrag, onDrag, startDrag]);
 
   const onKeyDown = useCallback(
-    (key: string) => {
+    (key: string, e?: MouseEvent) => {
+      if (e) {
+        e.preventDefault();
+      }
       const isKeyShift = key === "{shift}" || key === "ShiftLeft" || key === "ShiftRight";
       const isKeyCaps = key === "CapsLock";
       const cleanKey = key.replace(/[()]/g, "");
@@ -249,6 +270,7 @@ function KeyboardWrapper() {
             setIsCapsLockActive(false);
           }
           sendKeyboardEvent([keys["CapsLock"]], []);
+          setTimeout(resetKeyboardState, 100);
           return;
         }
       }
@@ -299,7 +321,6 @@ function KeyboardWrapper() {
         });
         setLayoutName("default");
       }
-
       setTimeout(resetKeyboardState, 100);
     },
     [isCapsLockActive, isKeyboardLedManagedByHost, sendKeyboardEvent, resetKeyboardState, setIsCapsLockActive, lockedModifiers, modifierLockMode],
@@ -314,12 +335,12 @@ function KeyboardWrapper() {
     lockedModifiers.meta ? "MetaLeft MetaRight" : "",
     lockedModifiers.shift ? "ShiftLeft ShiftRight" : "",
   ].filter(Boolean).join(" ").trim();
-
+  
   return (
     <div
-      className="transition-all duration-500 ease-in-out"
+      className="transition-all duration-200 ease-in-out"
       style={{
-        marginBottom: virtualKeyboard ? "0px" : `-${350}px`,
+        marginBottom: virtualKeyboard ? "0px" : `-${500}px`,
       }}
     >
       <AnimatePresence>
@@ -329,7 +350,7 @@ function KeyboardWrapper() {
             animate={{ opacity: 1, y: "0%" }}
             exit={{ opacity: 0, y: "100%" }}
             transition={{
-              duration: 0.5,
+              duration: 0.2,
               ease: "easeInOut",
             }}
           >
@@ -351,149 +372,553 @@ function KeyboardWrapper() {
                   "rounded-none": showAttachedVirtualKeyboard,
                 })}
               >
-                <div className="flex items-center justify-center border-b border-b-slate-800/30 bg-white px-2 py-1 dark:border-b-slate-300/20 dark:bg-slate-800">
-                  <div className="absolute left-2 flex items-center gap-x-2">
-                    {showAttachedVirtualKeyboard ? (
-                      <Button
-                        size="XS"
-                        theme="light"
-                        text={$at("Detach")}
-                        onClick={() => setShowAttachedVirtualKeyboard(false)}
-                      />
-                    ) : (
-                      <Button
-                        size="XS"
-                        theme="light"
-                        text={$at("Attach")}
-                        LeadingIcon={AttachIcon}
-                        onClick={() => setShowAttachedVirtualKeyboard(true)}
-                      />
-                    )}
-                  </div>
-                  <div className="flex flex-col items-center gap-y-1">
-                    <h2 className="select-none self-center font-sans text-[12px] text-slate-700 dark:text-slate-300">
-                      {$at("Virtual Keyboard")}
-                    </h2>
-                  </div>
-                  <div className="absolute right-2">
-                    <Button
-                      size="XS"
-                      theme="light"
-                      text={$at("Hide")}
-                      LeadingIcon={ChevronDownIcon}
-                      onClick={() => setVirtualKeyboard(false)}
-                    />
-                  </div>
-                </div>
+                {isMobile ?
+                  <>
+                    <div
+                      className={`flex items-center justify-center w-full border-b border-b-slate-800/30  px-1 py-0 dark:border-b-slate-300/20 ${dark_bg2_style}`}>
 
-                <div>
-                  {/* First row with Lock Mode and combination keys */}
-                  <div className="flex items-center bg-blue-50/80 md:flex-row dark:bg-slate-700 gap-x-2 px-2 py-1">
-                    {/* Lock Mode toggle - positioned before Ctrl+Alt+Delete */}
-                    <div className="flex items-center gap-x-2">
-                      <span className="text-[10px] text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                        {$at("Lock Mode")}
-                      </span>
-                      <button
-                        onClick={() => setModifierLockMode(!modifierLockMode)}
-                        className={cx(
-                          "relative inline-flex h-4 w-8 items-center rounded-full transition-colors",
-                          modifierLockMode ? "bg-blue-500" : "bg-slate-300 dark:bg-slate-600"
-                        )}
-                        title={modifierLockMode ? $at("Click to switch to direct trigger mode") : $at("Click to switch to lock mode")}
-                      >
-                        <span
-                          className={cx(
-                            "inline-block h-3 w-3 transform rounded-full bg-white transition-transform",
-                            modifierLockMode ? "translate-x-4" : "translate-x-1"
-                          )}
-                        />
-                      </button>
-                    </div>
-                    {/* Combination keys */}
-                    <div className="flex items-center gap-x-1">
-                      <button
-                        className="hg-button combination-key inline-flex h-auto w-auto grow-0 py-1 px-2 text-xs border border-b border-slate-800/25 border-b-slate-800/25 shadow-xs dark:bg-slate-800 dark:text-white"
-                        onClick={() => onKeyDown("CtrlAltDelete")}
-                      >
-                        Ctrl + Alt + Delete
-                      </button>
-                      <button
-                        className="hg-button combination-key inline-flex h-auto w-auto grow-0 py-1 px-2 text-xs border border-b border-slate-800/25 border-b-slate-800/25 shadow-xs dark:bg-slate-800 dark:text-white"
-                        onClick={() => onKeyDown("AltMetaEscape")}
-                      >
-                        Alt + Meta + Escape
-                      </button>
-                      <button
-                        className="hg-button combination-key inline-flex h-auto w-auto grow-0 py-1 px-2 text-xs border border-b border-slate-800/25 border-b-slate-800/25 shadow-xs dark:bg-slate-800 dark:text-white"
-                        onClick={() => onKeyDown("CtrlAltBackspace")}
-                      >
-                        Ctrl + Alt + Backspace
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex flex-col bg-blue-50/80 md:flex-row dark:bg-slate-700">
-                    <Keyboard
-                      baseClass="simple-keyboard-main"
-                      layoutName={layoutName}
-                      onKeyPress={onKeyDown}
-                      buttonTheme={
-                        modifierLockMode && modifierLockButtons
-                          ? [{ class: "modifier-locked", buttons: modifierLockButtons }]
-                          : []
-                      }
-                      display={keyDisplayMap}
-                      layout={{
-                        default: [
-                          "Escape F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12",
-                          "Backquote Digit1 Digit2 Digit3 Digit4 Digit5 Digit6 Digit7 Digit8 Digit9 Digit0 Minus Equal Backspace",
-                          "Tab KeyQ KeyW KeyE KeyR KeyT KeyY KeyU KeyI KeyO KeyP BracketLeft BracketRight Backslash",
-                          "CapsLock KeyA KeyS KeyD KeyF KeyG KeyH KeyJ KeyK KeyL Semicolon Quote Enter",
-                          "ShiftLeft KeyZ KeyX KeyC KeyV KeyB KeyN KeyM Comma Period Slash ShiftRight",
-                          "ControlLeft AltLeft MetaLeft Space MetaRight AltRight",
-                        ],
-                        shift: [
-                          "Escape F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12",
-                          "(Backquote) (Digit1) (Digit2) (Digit3) (Digit4) (Digit5) (Digit6) (Digit7) (Digit8) (Digit9) (Digit0) (Minus) (Equal) (Backspace)",
-                          "Tab (KeyQ) (KeyW) (KeyE) (KeyR) (KeyT) (KeyY) (KeyU) (KeyI) (KeyO) (KeyP) (BracketLeft) (BracketRight) (Backslash)",
-                          "CapsLock (KeyA) (KeyS) (KeyD) (KeyF) (KeyG) (KeyH) (KeyJ) (KeyK) (KeyL) (Semicolon) (Quote) Enter",
-                          "ShiftLeft (KeyZ) (KeyX) (KeyC) (KeyV) (KeyB) (KeyN) (KeyM) (Comma) (Period) (Slash) ShiftRight",
-                          "ControlLeft AltLeft MetaLeft Space MetaRight AltRight",
-                        ],
-                      }}
-                      disableButtonHold={true}
-                      syncInstanceInputs={true}
-                      debug={false}
-                    />
+                      <style>
+                        {`
+                          .simple-keyboard-topcontrol .hg-button.hg-mod-active {
+                            background-color: rgba(22,152,217,0.15) !important;
+                            border-color: rgba(22,152,217,0.6) !important;
+                          }
+                          .simple-keyboard-main .hg-button.modifier-locked,
+                          .simple-keyboard-topcontrol .hg-button.modifier-locked,
+                          .simple-keyboard-main2 .hg-button.modifier-locked {
+                            background-color: rgba(22,152,217,0.3) !important;
+                            border-color: rgba(22,152,217,0.8) !important;
+                            color: rgba(22,152,217,1) !important;
+                          }
+                          html.dark .simple-keyboard-main .hg-button.modifier-locked,
+                          html.dark .simple-keyboard-topcontrol .hg-button.modifier-locked,
+                          html.dark .simple-keyboard-main2 .hg-button.modifier-locked {
+                            background-color: rgba(22,152,217,0.5) !important;
+                            color: white !important;
+                          }
+                          html.dark .simple-keyboard-topcontrol,
+                          html.dark .simple-keyboard-main2 {
+                            background-color: transparent !important;
+                          }
+                          html.dark .simple-keyboard-topcontrol .hg-button,
+                          html.dark .simple-keyboard-main2 .hg-button {
+                            background-color: rgba(26,26,26,1);
+                            color: white;
+                          }
+                          /* Add click animation */
+                          .hg-button:active {
+                            background-color: rgba(0,0,0,0.2) !important;
+                          }
+                          html.dark .hg-button:active {
+                            background-color: rgba(255,255,255,0.2) !important;
+                          }
+                          html.dark .simple-keyboard-topcontrol .hg-button:active,
+                          html.dark .simple-keyboard-main2 .hg-button:active {
+                            background-color: rgba(255,255,255,0.2) !important;
+                          }
+                          .hg-button {
+                            transition: background-color 0.02s ease-in-out;
+                          }
+                        `}
+                      </style>
 
-                    <div className="controlArrows">
                       <Keyboard
-                        baseClass="simple-keyboard-control"
-                        theme="simple-keyboard hg-theme-default hg-layout-default"
+                        baseClass="simple-keyboard-topcontrol"
                         layoutName={layoutName}
-                        onKeyPress={onKeyDown}
-                        display={keyDisplayMap}
-                        layout={{
-                          default: ["PrintScreen ScrollLock Pause", "Insert Home Pageup", "Delete End Pagedown"],
-                          shift: ["(PrintScreen) ScrollLock (Pause)", "Insert Home Pageup", "Delete End Pagedown"],
+                        buttonTheme={[
+                          ...(stickyModifiers.length ? [{ class: "hg-mod-active", buttons: stickyModifiers.join(" ") }] : []),
+                          ...(modifierLockMode && modifierLockButtons ? [{ class: "modifier-locked", buttons: modifierLockButtons }] : [])
+                        ]}
+                        onKeyPress={(key: string) => {
+                          if (key === "Back") {
+                            setVirtualKeyboard(false);
+                            return;
+                          }
+                          if (key === "ShiftLeft" || key === "ControlLeft" || key === "AltLeft" || key === "MetaLeft") {
+                            onKeyDown(key);
+                            return;
+                          }
+                          onKeyDown(key);
                         }}
-                        syncInstanceInputs={true}
-                        debug={false}
-                      />
-                      <Keyboard
-                        baseClass="simple-keyboard-arrows"
-                        theme="simple-keyboard hg-theme-default hg-layout-default"
-                        onKeyPress={onKeyDown}
-                        display={keyDisplayMap}
+                        display={sKeyDisplayMap}
                         layout={{
-                          default: ["ArrowUp", "ArrowLeft ArrowDown ArrowRight"],
+                          default: [
+                            "Escape Tab MetaLeft PageUp ArrowUp PageDown Delete",
+                            "ShiftLeft ControlLeft AltLeft ArrowLeft ArrowDown ArrowRight Back",
+                          ],
+                          shift: [
+                            "Escape Tab MetaLeft PageUp ArrowUp PageDown Delete",
+                            "ShiftLeft ControlLeft AltLeft ArrowLeft ArrowDown ArrowRight Back",
+                          ],
                         }}
+                        disableButtonHold={true}
                         syncInstanceInputs={true}
                         debug={false}
                       />
                     </div>
-                  </div>
-                </div>
+                    <div
+                      className={`flex items-center justify-center flex-col border-b border-b-slate-800/30  px-1 py-0 dark:border-b-slate-300/20 ${dark_bg2_style}`}>
+                      {
+                        useNum?
+                          <>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4"}>
+                              <Keyboard
+                                baseClass="simple-keyboard-main2"
+                                layoutName={layoutName}
+                                onKeyPress={onKeyDown}
+                                display={keyDisplayMap2}
+                                buttonTheme={
+                                  modifierLockMode && modifierLockButtons
+                                    ? [{ class: "modifier-locked", buttons: modifierLockButtons }]
+                                    : []
+                                }
+                                layout={{
+                                  default: [
+                                    useFn
+                                      ? "F1 F2 F3 F4 F5 F6 F7 F8 F9 F10"
+                                      : "Digit1 Digit2 Digit3 Digit4 Digit5 Digit6 Digit7 Digit8 Digit9 Digit0",
+                                  ],
+                                  shift: [
+                                    useFn
+                                      ? "F1 F2 F3 F4 F5 F6 F7 F8 F9 F10"
+                                      : "(Digit1) (Digit2) (Digit3) (Digit4) (Digit5) (Digit6) (Digit7) (Digit8) (Digit9) (Digit0)",
+                                  ],
+                                }}
+
+                                disableButtonHold={true}
+                                syncInstanceInputs={true}
+                                debug={false}
+                              />
+                            </div>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4 px-3"}>
+                              <Keyboard
+                                baseClass="simple-keyboard-main2"
+                                layoutName={layoutName}
+                                onKeyPress={(key: string) => {
+                                  if (key === "Fn") {
+                                    setUseFn(prev => !prev);
+                                    return;
+                                  }
+                                  onKeyDown(key);
+                                }}
+                                display={keyDisplayMap2}
+                                buttonTheme={
+                                  modifierLockMode && modifierLockButtons
+                                    ? [{ class: "modifier-locked", buttons: modifierLockButtons }]
+                                    : []
+                                }
+                                layout={{
+                                  default: [
+                                    useFn
+                                      ? "Fn Backquote F11 F12 BracketLeft BracketRight Backslash"
+                                      : "Fn Backquote Minus Equal BracketLeft BracketRight Backslash",
+                                  ],
+                                  shift: [
+                                    useFn
+                                      ? "Fn Backquote F11 F12 BracketLeft BracketRight Backslash"
+                                      : "Fn (Backquote) (Minus) (Equal) (BracketLeft) (BracketRight) (Backslash)",
+                                  ],
+                                }}
+
+                                disableButtonHold={true}
+                                syncInstanceInputs={true}
+                                debug={false}
+                              />
+                            </div>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4"}>
+                              <Keyboard
+                                baseClass="simple-keyboard-main2"
+                                layoutName={layoutName}
+                                onKeyPress={onKeyDown}
+                                display={keyDisplayMap2}
+                                buttonTheme={
+                                  modifierLockMode && modifierLockButtons
+                                    ? [{ class: "modifier-locked", buttons: modifierLockButtons }]
+                                    : []
+                                }
+                                layout={{
+                                  default: [
+
+                                    "ShiftLeft Semicolon  Quote Period Slash Backspace",
+                                  ],
+                                  shift: [
+
+                                    "ShiftLeft (Semicolon) (Quote) (Period) (Slash) Backspace",
+                                  ],
+                                }}
+
+                                disableButtonHold={true}
+                                syncInstanceInputs={true}
+                                debug={false}
+                              />
+                            </div>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4"}>
+                              <div className={"w-1/5"}>
+                                <Keyboard
+                                  baseClass="simple-keyboard-main2"
+                                  layoutName={layoutName}
+                                  onKeyPress={() => {
+                                    setUseNum(false);
+                                  }}
+                                  display={keyDisplayMap2}
+                                  layout={{
+                                    default: [
+                                      "abc",
+                                    ],
+                                    shift: [
+                                      "abc",
+                                    ],
+                                  }} />
+                              </div>
+                              <div className={"w-3/5"}>
+                                <Keyboard
+                                  baseClass="simple-keyboard-main2"
+                                  layoutName={layoutName}
+                                  onKeyPress={onKeyDown}
+                                  display={keyDisplayMap2}
+                                  layout={{
+                                    default: [
+                                      "Space",
+                                    ],
+                                    shift: [
+                                      "Space",
+                                    ],
+                                  }}
+
+                                  disableButtonHold={true}
+                                  syncInstanceInputs={true}
+                                  debug={false}
+                                />
+                              </div>
+                              <div className={"w-1/5"}>
+                                <Keyboard
+                                  baseClass="simple-keyboard-main2"
+                                  layoutName={layoutName}
+                                  onKeyPress={onKeyDown}
+                                  display={keyDisplayMap2}
+                                  layout={{
+                                    default: [
+                                      "Enter",
+                                    ],
+                                    shift: [
+                                      "Enter",
+                                    ],
+                                  }} />
+                              </div>
+
+                            </div>
+                          </>
+                          :
+                          <>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4"}>
+                              <Keyboard
+                                baseClass="simple-keyboard-main2"
+                                layoutName={layoutName}
+                                onKeyPress={onKeyDown}
+                                display={keyDisplayMap2}
+                                layout={{
+                                  default: [
+                                    "KeyQ KeyW KeyE KeyR KeyT KeyY KeyU KeyI KeyO KeyP",
+                                  ],
+                                  shift: [
+                                    "(KeyQ) (KeyW) (KeyE) (KeyR) (KeyT) (KeyY) (KeyU) (KeyI) (KeyO) (KeyP)",
+                                  ],
+                                }}
+
+                                disableButtonHold={true}
+                                syncInstanceInputs={true}
+                                debug={false}
+                              />
+                            </div>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4 px-3"}>
+                              <Keyboard
+                                baseClass="simple-keyboard-main2"
+                                layoutName={layoutName}
+                                onKeyPress={onKeyDown}
+                                display={keyDisplayMap2}
+                                layout={{
+                                  default: [
+
+                                    "KeyA KeyS KeyD KeyF KeyG KeyH KeyJ KeyK KeyL",
+
+                                  ],
+                                  shift: [
+
+                                    "(KeyA) (KeyS) (KeyD) (KeyF) (KeyG) (KeyH) (KeyJ) (KeyK) (KeyL)",
+
+                                  ],
+                                }}
+
+                                disableButtonHold={true}
+                                syncInstanceInputs={true}
+                                debug={false}
+                              />
+                            </div>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4"}>
+                              <Keyboard
+                                baseClass="simple-keyboard-main2"
+                                layoutName={layoutName}
+                                onKeyPress={onKeyDown}
+                                display={keyDisplayMap2}
+                                layout={{
+                                  default: [
+
+                                    "ShiftLeft KeyZ KeyX KeyC KeyV KeyB KeyN KeyM Backspace",
+                                  ],
+                                  shift: [
+
+                                    "ShiftLeft (KeyZ) (KeyX) (KeyC) (KeyV) (KeyB) (KeyN) (KeyM) Backspace",
+                                  ],
+                                }}
+
+                                disableButtonHold={true}
+                                syncInstanceInputs={true}
+                                debug={false}
+                              />
+                            </div>
+                            <div className={"flex flex-row w-full justify-between items-center h-1/4"}>
+                              <div className={"w-1/5"}>
+                                <Keyboard
+                                  baseClass="simple-keyboard-main2"
+                                  layoutName={layoutName}
+                                  onKeyPress={() => {
+                                    setUseNum(true);
+                                  }}
+                                  display={keyDisplayMap2}
+                                  layout={{
+                                    default: [
+                                      "123",
+                                    ],
+                                    shift: [
+                                      "123",
+                                    ],
+                                  }} />
+                              </div>
+                              <div className={"w-3/5"}>
+                                <Keyboard
+                                  baseClass="simple-keyboard-main2"
+                                  layoutName={layoutName}
+                                  onKeyPress={onKeyDown}
+                                  display={keyDisplayMap2}
+                                  layout={{
+                                    default: [
+                                      "Space",
+                                    ],
+                                    shift: [
+                                      "Space",
+                                    ],
+                                  }}
+
+                                  disableButtonHold={true}
+                                  syncInstanceInputs={true}
+                                  debug={false}
+                                />
+                              </div>
+                              <div className={"w-1/5"}>
+                                <Keyboard
+                                  baseClass="simple-keyboard-main2"
+                                  layoutName={layoutName}
+                                  onKeyPress={onKeyDown}
+                                  display={keyDisplayMap2}
+                                  layout={{
+                                    default: [
+                                      "Enter",
+                                    ],
+                                    shift: [
+                                      "Enter",
+                                    ],
+                                  }}
+                                  
+                                  disableButtonHold={true}
+                                  syncInstanceInputs={true}
+                                  debug={false}
+                                />
+                              </div>
+
+                            </div>
+                          </>
+                      }
+
+                    </div>
+                  </>
+                  :
+                  <>
+                    <div
+                      className={`w-full h-[36px] flex items-center justify-between border-b border-b-slate-800/30 px-2  dark:border-b-slate-300/20 ${dark_bg2_style}`}>
+                      <div className=" left-2 flex items-center gap-x-2">
+                        {!isMobile && (
+                          <div className="flex items-center gap-x-2 ml-2">
+                            <Switch
+                              size="small"
+                              checked={modifierLockMode}
+                              onChange={setModifierLockMode}
+                              checkedChildren={<LockClosedIcon className="w-3 h-3 mt-0.5" />}
+                            />
+                            <span className="text-[10px] text-gray-500">
+                              {$at("Sticky Keys")}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <h2 className="select-none self-center font-sans text-[12px] text-[rgba(102,102,102,1)]">
+                        {$at("Virtual Keyboard")}
+                      </h2>
+                      <div className="h-full flex items-center">
+                        <div style={{ width: "1px", height: "100%" }}
+                             className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"}></div>
+                        <AntdButton
+                          type={"text"}
+                          icon={<GoBottomSvg />}
+                          onClick={() => setVirtualKeyboard(false)}
+                        >
+                          {$at("Hide")}
+                        </AntdButton>
+                      </div>
+                    </div>
+                    <div>
+                      <div className={`flex flex-col ${dark_bg2_style} md:flex-col `}>
+                      <style>
+                        {`
+                          html.dark .simple-keyboard-main,
+                          html.dark .simple-keyboard-control,
+                          html.dark .simple-keyboard-arrows {
+                            background-color: transparent !important;
+                          }
+                          html.dark .simple-keyboard-main .hg-button,
+                          html.dark .simple-keyboard-control .hg-button,
+                          html.dark .simple-keyboard-arrows .hg-button {
+                            background-color: rgba(44, 44, 46, 1) !important;
+                            color: white !important;
+                          }
+                          /* Add click animation */
+                          .hg-button:active {
+                            background-color: rgba(0,0,0,0.2) !important;
+                          }
+                          html.dark .hg-button:active {
+                            background-color: rgba(255,255,255,0.2) !important;
+                          }
+                          /* Specific overrides for dark mode PC layout sections */
+                          html.dark .simple-keyboard-main .hg-button:active,
+                          html.dark .simple-keyboard-control .hg-button:active,
+                          html.dark .simple-keyboard-arrows .hg-button:active {
+                            background-color: rgba(255,255,255,0.2) !important;
+                          }
+                          .hg-button {
+                            transition: background-color 0.05s ease-in-out;
+                          }
+                        `}
+                      </style>
+                        <div style={{ width: "40%" }} className={"flex items-start justify-center flex-col"}>
+                          <div className={"h-[10px]"}></div>
+                          <Keyboard
+                            baseClass="simple-keyboard-main"
+                            layoutName={layoutName}
+                            onKeyPress={onKeyDown}
+                            buttonTheme={
+                              modifierLockMode && modifierLockButtons
+                                ? [{ class: "modifier-locked", buttons: modifierLockButtons }]
+                                : []
+                            }
+                            display={keyDisplayMap}
+                            layout={{
+                              default: [
+                                "CtrlAltDelete AltMetaEscape CtrlAltBackspace",
+
+                              ],
+                              shift: [
+                                "CtrlAltDelete AltMetaEscape CtrlAltBackspace",
+
+                              ],
+                            }}
+                            disableButtonHold={true}
+                            syncInstanceInputs={true}
+                            debug={false}
+                          />
+                        </div>
+
+
+                        <div className={`flex flex-col  md:flex-row ${dark_bg2_style}`}>
+                          <Keyboard
+                            baseClass="simple-keyboard-main"
+                            layoutName={layoutName}
+                            onKeyPress={onKeyDown}
+                            display={keyDisplayMap}
+                            buttonTheme={
+                              modifierLockMode && modifierLockButtons
+                                ? [{ class: "modifier-locked", buttons: modifierLockButtons }]
+                                : []
+                            }
+                            layout={virtualKeyboardLayout.main}
+                            disableButtonHold={true}
+                            syncInstanceInputs={true}
+                            debug={false}
+                          />
+
+                          {/*<div className="controlArrows">*/}
+                          <div style={{
+                            display: "flex",
+                            flex: 1,
+                            alignItems: "center",
+                            flexDirection: "column",
+                            justifyContent: "space-between",
+                          }}>
+                            <Keyboard
+                              baseClass="simple-keyboard-control"
+                              theme="simple-keyboard hg-theme-default hg-layout-default"
+                              layoutName={layoutName}
+                              onKeyPress={onKeyDown}
+                              display={keyDisplayMap}
+                              layout={virtualKeyboardLayout.control}
+                              syncInstanceInputs={true}
+                              debug={false}
+                            />
+                            <div style={{
+                              display: "flex",
+                              width: "100%",
+                              alignItems: "center",
+                              flexDirection: "column",
+                              justifyContent: "space-between",
+                            }}>
+                              <div style={{
+                                display: "flex",
+                                width: "34%",
+
+                                alignItems: "center",
+                                flexDirection: "column",
+                                justifyContent: "space-between",
+                              }}>
+                                <Keyboard
+                                  baseClass="simple-keyboard-arrows"
+                                  theme="simple-keyboard hg-theme-default hg-layout-default"
+                                  onKeyPress={onKeyDown}
+                                  display={keyDisplayMap}
+                                  layout={{
+                                    default: [virtualKeyboardLayout.arrows?.default?.[0] || "ArrowUp"],
+                                  }}
+                                  syncInstanceInputs={true}
+                                  debug={false}
+
+                                />
+                              </div>
+
+                              <Keyboard
+                                baseClass="simple-keyboard-arrows"
+                                theme="simple-keyboard hg-theme-default hg-layout-default"
+                                onKeyPress={onKeyDown}
+                                display={keyDisplayMap}
+                                layout={{
+                                  default: [virtualKeyboardLayout.arrows?.default?.[1] || "ArrowLeft ArrowDown ArrowRight"],
+                                }}
+                                syncInstanceInputs={true}
+                                debug={false}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>}
+
               </Card>
             </div>
           </motion.div>

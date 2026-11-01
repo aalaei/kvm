@@ -89,6 +89,8 @@ func getTLSState() TLSState {
 		}
 	case "self-signed":
 		s.Mode = "self-signed"
+	default:
+		s.Mode = "disabled"
 	}
 
 	return s

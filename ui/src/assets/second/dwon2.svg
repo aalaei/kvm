@@ -1,0 +1,16 @@
+<svg viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="28.000000" height="28.000000" fill="none" clip-path="url(#clipPath_0)" customFrame="url(#clipPath_0)">
+	<defs>
+		<clipPath id="clipPath_0">
+			<rect width="28.000002" height="28.000000" x="0.000000" y="0.000000" rx="4.000000" fill="rgb(255,255,255)" />
+		</clipPath>
+		<clipPath id="clipPath_1">
+			<rect width="16.000002" height="16.000002" x="6.000000" y="6.000000" fill="rgb(255,255,255)" />
+		</clipPath>
+	</defs>
+	<rect id="宏按键" width="27.000002" height="27.000000" x="0.500000" y="0.500000" rx="3.500000" stroke="rgb(56,56,56)" stroke-width="1" />
+	<g id="下1 2" clip-path="url(#clipPath_1)" customFrame="url(#clipPath_1)">
+		<rect id="下1 2" width="16.000002" height="16.000002" x="6.000000" y="6.000000" />
+		<path id="矢量 79" d="M18 12.3335L14 16.3335L10 12.3335L18 12.3335Z" fill="rgb(255,255,255)" fill-rule="nonzero" />
+		<path id="矢量 79" d="M14 16.3335L10 12.3335L18 12.3335L14 16.3335Z" fill-rule="nonzero" stroke="rgb(255,255,255)" stroke-linejoin="round" stroke-width="1" />
+	</g>
+</svg>

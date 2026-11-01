@@ -1,9 +1,9 @@
 import React, { JSX } from "react";
 import clsx from "clsx";
 
-import FieldLabel from "@/components/FieldLabel";
-import { FieldError } from "@/components/InputField";
-import Card from "@/components/Card";
+import FieldLabel from "@components/FieldLabel";
+import { FieldError } from "@components/InputField";
+import Card from "@components/Card";
 import { cx } from "@/cva.config";
 
 type TextAreaProps = JSX.IntrinsicElements["textarea"] & {
@@ -15,9 +15,9 @@ const TextArea = React.forwardRef<HTMLTextAreaElement, TextAreaProps>(
     return (
       <Card
         className={cx(
-          "relative w-full",
+          "relative w-full border-2 border-slate-300",
           "invalid-within::ring-2 invalid-within::ring-red-600 invalid-within::ring-offset-2",
-          "focus-within:border-slate-300 focus-within:outline-hidden focus-within:ring-1 focus-within:ring-blue-700 dark:focus-within:border-slate-600",
+          "focus-within:border-slate-300  focus-within:ring-1 focus-within:ring-blue-400 dark:focus-within:border-slate-600 dark:focus-within:ring-blue-700",
         )}
       >
         <textarea

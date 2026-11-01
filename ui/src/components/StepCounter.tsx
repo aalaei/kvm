@@ -1,7 +1,7 @@
 import { CheckIcon } from "@heroicons/react/16/solid";
 
 import { cva, cx } from "@/cva.config";
-import Card from "@/components/Card";
+import Card from "@components/Card";
 
 interface Props {
   nSteps: number;
@@ -57,7 +57,7 @@ export default function StepCounter({ nSteps, currStepIdx, size = "MD" }: Props)
           return (
             <Card
               className={cx(
-                "flex items-center justify-center rounded-full! text-slate-600 dark:text-slate-400",
+                "flex items-center justify-center rounded-full! text-slate-600 dark:text-[#ffffff]",
                 textStyle,
                 size === "SM" ? "h-5 w-5" : "h-6 w-6",
               )}

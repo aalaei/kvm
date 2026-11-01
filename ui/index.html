@@ -2,29 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <!-- These are the fonts used in the app -->
-    <link
-      rel="preload"
-      href="/fonts/CircularXXWeb-Medium.woff2"
-      as="font"
-      type="font/woff2"
-      crossorigin
-    />
-    <link
-      rel="preload"
-      href="/fonts/CircularXXWeb-Book.woff2"
-      as="font"
-      type="font/woff2"
-      crossorigin
-    />
-    <link
-      rel="preload"
-      href="/fonts/CircularXXWeb-Regular.woff2"
-      as="font"
-      type="font/woff2"
-      crossorigin
-    />
+    <!-- Removed preload links to avoid warnings about unused fonts -->
     <title>KVM</title>
     <link rel="stylesheet" href="/fonts/fonts.css" />
     <link rel="icon" href="/logo-luckfox.png" />
@@ -49,7 +29,7 @@
     </script>
   </head>
   <body
-    class="h-full w-full bg-[#f3f9ff] font-sans text-sm antialiased dark:bg-slate-900 md:text-base"
+    class="h-full w-full bg-[#ffffff] font-sans text-sm antialiased dark:bg-[#000000] md:text-base"
   >
     <div id="root" class="w-full h-full"></div>
     <script type="module" src="/src/main.tsx"></script>

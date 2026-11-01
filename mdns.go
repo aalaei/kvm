@@ -11,7 +11,9 @@ func initMdns() error {
 		Logger: logger,
 		LocalNames: []string{
 			networkState.GetHostname(),
-			networkState.GetFQDN(),
+		},
+		Services: []mdns.Service{
+			{Type: "_http._tcp", Port: 80, TXT: []string{"path=/"}},
 		},
 		ListenOptions: &mdns.MDNSListenOptions{
 			IPv4: true,
@@ -22,8 +24,13 @@ func initMdns() error {
 		return err
 	}
 
-	// do not start the server yet, as we need to wait for the network state to be set
 	mDNS = m
+
+	// Start immediately with current network names; networkStateChanged() will
+	// call SetLocalNames/SetListenOptions again when the interface state updates.
+	if err := m.Start(); err != nil {
+		logger.Warn().Err(err).Msg("failed to start mDNS server on init")
+	}
 
 	return nil
 }

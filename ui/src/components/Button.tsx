@@ -1,11 +1,13 @@
 import React, { JSX } from "react";
 import { FetcherWithComponents, Link, LinkProps, useNavigation } from "react-router-dom";
 
-import ExtLink from "@/components/ExtLink";
-import LoadingSpinner from "@/components/LoadingSpinner";
+import ExtLink from "@components/ExtLink";
+import LoadingSpinner from "@components/LoadingSpinner";
 import { cva, cx } from "@/cva.config";
+import { button_primary_color } from "@/layout/theme_color";
 
 const sizes = {
+  SS: "h-[24px] px-2 text-xs",
   XS: "h-[28px] px-2 text-xs",
   SM: "h-[36px] px-3 text-[13px]",
   MD: "h-[40px] px-3.5 text-sm",
@@ -15,8 +17,8 @@ const sizes = {
 
 const themes = {
   primary: cx(
-    // Base styles
-    "bg-blue-700 dark:border-blue-600 border border-blue-900/60 text-white shadow-sm",
+    // Base styles bg-blue-700
+    `${button_primary_color} dark:border-blue-600 border border-transparent text-white shadow-sm`,
     // Hover states
     "group-hover:bg-blue-800",
     // Active states
@@ -73,7 +75,7 @@ const btnVariants = cva({
     // Text classes
     "font-display text-center font-medium leading-tight",
     // States
-    "group-focus:outline-hidden group-focus:ring-2 group-focus:ring-offset-2 group-focus:ring-blue-700",
+    "group-focus:outline-hidden group-focus:ring-2 group-focus:ring-offset-2 group-focus:ring-blue-400 dark:group-focus:ring-blue-700",
     "group-disabled:opacity-50 group-disabled:pointer-events-none",
   ),
 
@@ -86,6 +88,7 @@ const btnVariants = cva({
 const iconVariants = cva({
   variants: {
     size: {
+      SS: "h-2.5",
       XS: "h-3.5",
       SM: "h-3.5",
       MD: "h-5",
@@ -112,23 +115,41 @@ interface ButtonContentPropsType {
   size: keyof typeof sizes;
   theme: keyof typeof themes;
   loading?: boolean;
+  hideBorder?: boolean;
 }
 
 function ButtonContent(props: ButtonContentPropsType) {
-  const { text, LeadingIcon, TrailingIcon, fullWidth, className, textAlign, loading } =
-    props;
+  const {
+    text,
+    LeadingIcon,
+    TrailingIcon,
+    fullWidth,
+    className,
+    textAlign,
+    loading,
+    hideBorder
+  } = props;
 
   // Based on the size prop, we'll use the corresponding variant classnames
   const iconClassName = iconVariants(props);
   const btnClassName = btnVariants(props);
+
   return (
-    <div className={cx(className, fullWidth ? "flex" : "inline-flex", btnClassName)}>
+    <div
+      className={cx(
+        className,
+        fullWidth ? "flex" : "inline-flex",
+        btnClassName,
+        hideBorder ? "border-none" : ""
+      )}
+    >
       <div
         className={cx(
           "flex w-full min-w-0 items-center gap-x-1.5 text-center",
           textAlign === "left" ? "text-left!" : "",
           textAlign === "center" ? "text-center!" : "",
           textAlign === "right" ? "text-right!" : "",
+          hideBorder ? "border-0" : ""
         )}
       >
         {loading ? (
@@ -137,7 +158,7 @@ function ButtonContent(props: ButtonContentPropsType) {
           </div>
         ) : (
           LeadingIcon && (
-            <LeadingIcon className={cx(iconClassName, "shrink-0 justify-start")} />
+            <LeadingIcon className={cx(iconClassName, "shrink-0 justify-start","dark:text-white")} />
           )
         )}
 
@@ -154,7 +175,6 @@ function ButtonContent(props: ButtonContentPropsType) {
     </div>
   );
 }
-
 type ButtonPropsType = Pick<
   JSX.IntrinsicElements["button"],
   | "type"
@@ -169,25 +189,30 @@ type ButtonPropsType = Pick<
   | "onMouseLeave"
 > &
   React.ComponentProps<typeof ButtonContent> & {
-    fetcher?: FetcherWithComponents<unknown>;
-  };
-
+  fetcher?: FetcherWithComponents<unknown>;
+  hideBorder?: boolean;
+  className?: string;
+};
 export const Button = React.forwardRef<HTMLButtonElement, ButtonPropsType>(
-  ({ type, disabled, onClick, formNoValidate, loading, fetcher, ...props }, ref) => {
+  ({ className,type, onClick, formNoValidate, loading, fetcher, hideBorder, ...props }, ref) => {
     const classes = cx(
       "group outline-hidden",
       props.fullWidth ? "w-full" : "",
       loading ? "pointer-events-none" : "",
+      hideBorder ? "border-none" : "",
+      className
     );
+
     const navigation = useNavigation();
     const loader = fetcher ? fetcher : navigation;
+
     return (
       <button
         ref={ref}
         formNoValidate={formNoValidate}
         className={classes}
         type={type}
-        disabled={disabled}
+        disabled={false}
         onClick={onClick}
         onMouseDown={props?.onMouseDown}
         onMouseUp={props?.onMouseUp}
@@ -197,6 +222,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonPropsType>(
       >
         <ButtonContent
           {...props}
+          hideBorder={hideBorder}
           loading={
             loading ??
             (type === "submit" &&
@@ -208,6 +234,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonPropsType>(
     );
   },
 );
+
 
 Button.displayName = "Button";
 

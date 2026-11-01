@@ -24,7 +24,7 @@ type VideoInputState struct {
 	Error          string  `json:"error,omitempty"` //no_signal, no_lock, out_of_range
 	Width          int     `json:"width"`
 	Height         int     `json:"height"`
-	FramePerSecond float64 `json:"fps"`
+	FramePerSecond float64 `json:"frame_per_second"`
 }
 
 var lastVideoState VideoInputState
@@ -52,5 +52,10 @@ func rpcGetVideoState() (VideoInputState, error) {
 
 func setForceHpd() error {
 	err := rpcSetForceHpd(config.ForceHpd)
+	return err
+}
+
+func setNpuAppStatus() error {
+	err := rpcSetNpuAppStatus(config.NpuAppEnabled)
 	return err
 }

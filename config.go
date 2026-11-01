@@ -2,6 +2,9 @@ package kvm
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +22,12 @@ import (
 type WakeOnLanDevice struct {
 	Name       string `json:"name"`
 	MacAddress string `json:"macAddress"`
+}
+
+type TurnServer struct {
+	URL        string `json:"url"`
+	Username   string `json:"username"`
+	Credential string `json:"credential"`
 }
 
 // Constants for keyboard macro limits
@@ -81,13 +90,16 @@ func (m *KeyboardMacro) Validate() error {
 
 type Config struct {
 	STUN                 string                 `json:"stun"`
+	TurnServers          []TurnServer           `json:"turn_servers"`
 	JigglerEnabled       bool                   `json:"jiggler_enabled"`
 	AutoUpdateEnabled    bool                   `json:"auto_update_enabled"`
 	IncludePreRelease    bool                   `json:"include_pre_release"`
+	UpdateDownloadProxy  string                 `json:"update_download_proxy"`
 	HashedPassword       string                 `json:"hashed_password"`
 	LocalAuthToken       string                 `json:"local_auth_token"`
 	LocalAuthMode        string                 `json:"localAuthMode"` //TODO: fix it with migration
 	LocalLoopbackOnly    bool                   `json:"local_loopback_only"`
+	UsbEnhancedDetection bool                   `json:"usb_enhanced_detection"`
 	WakeOnLanDevices     []WakeOnLanDevice      `json:"wake_on_lan_devices"`
 	KeyboardMacros       []KeyboardMacro        `json:"keyboard_macros"`
 	KeyboardLayout       string                 `json:"keyboard_layout"`
@@ -100,10 +112,10 @@ type Config struct {
 	DisplayOffAfterSec   int                    `json:"display_off_after_sec"`
 	TLSMode              string                 `json:"tls_mode"` // options: "self-signed", "user-defined", ""
 	UsbConfig            *usbgadget.Config      `json:"usb_config"`
-    UsbDevices           *usbgadget.Devices     `json:"usb_devices"`
-    NetworkConfig        *network.NetworkConfig `json:"network_config"`
-    AppliedNetworkConfig *network.NetworkConfig `json:"applied_network_config,omitempty"`
-    DefaultLogLevel      string                 `json:"default_log_level"`
+	UsbDevices           *usbgadget.Devices     `json:"usb_devices"`
+	NetworkConfig        *network.NetworkConfig `json:"network_config"`
+	AppliedNetworkConfig *network.NetworkConfig `json:"applied_network_config,omitempty"`
+	DefaultLogLevel      string                 `json:"default_log_level"`
 	TailScaleAutoStart   bool                   `json:"tailscale_autostart"`
 	TailScaleXEdge       bool                   `json:"tailscale_xedge"`
 	ZeroTierNetworkID    string                 `json:"zerotier_network_id"`
@@ -115,6 +127,8 @@ type Config struct {
 	IO0Status            bool                   `json:"io0_status"`
 	IO1Status            bool                   `json:"io1_status"`
 	AudioMode            string                 `json:"audio_mode"`
+	AudioRateFactor      float64                `json:"audio_rate_factor"`
+	HDMISwitchURL        string                 `json:"hdmi_switch_url"`
 	TimeZone             string                 `json:"time_zone"`
 	LEDGreenMode         string                 `json:"led_green_mode"`
 	LEDYellowMode        string                 `json:"led_yellow_mode"`
@@ -123,24 +137,72 @@ type Config struct {
 	EasytierConfig       EasytierConfig         `json:"easytier_config"`
 	VntAutoStart         bool                   `json:"vnt_autostart"`
 	VntConfig            VntConfig              `json:"vnt_config"`
+	WireguardAutoStart   bool                   `json:"wireguard_autostart"`
+	WireguardConfig      WireguardConfig        `json:"wireguard_config"`
+	NpuAppEnabled        bool                   `json:"npu_app_enabled"`
+	Firewall             *FirewallConfig        `json:"firewall"`
+	APIKey               string                 `json:"api_key"`
+}
+
+type FirewallConfig struct {
+	Base         FirewallBaseRule   `json:"base"`
+	Rules        []FirewallRule     `json:"rules"`
+	PortForwards []FirewallPortRule `json:"portForwards"`
+}
+
+type FirewallBaseRule struct {
+	InputPolicy   string `json:"inputPolicy"`
+	OutputPolicy  string `json:"outputPolicy"`
+	ForwardPolicy string `json:"forwardPolicy"`
+}
+
+type FirewallRule struct {
+	Chain           string   `json:"chain"`
+	SourceIP        string   `json:"sourceIP"`
+	SourcePort      *int     `json:"sourcePort,omitempty"`
+	Protocols       []string `json:"protocols"`
+	DestinationIP   string   `json:"destinationIP"`
+	DestinationPort *int     `json:"destinationPort,omitempty"`
+	Action          string   `json:"action"`
+	Comment         string   `json:"comment"`
+}
+
+type FirewallPortRule struct {
+	Chain           string   `json:"chain,omitempty"`
+	Managed         *bool    `json:"managed,omitempty"`
+	SourcePort      int      `json:"sourcePort"`
+	Protocols       []string `json:"protocols"`
+	DestinationIP   string   `json:"destinationIP"`
+	DestinationPort int      `json:"destinationPort"`
+	Comment         string   `json:"comment"`
 }
 
 type VntConfig struct {
-    Token      string `json:"token"`
-    DeviceId   string `json:"device_id"`
-    Name       string `json:"name"`
-    ServerAddr string `json:"server_addr"`
-    ConfigMode string `json:"config_mode"` // "params" or "file"
-    ConfigFile string `json:"config_file"`
-    Model      string `json:"model"`
-    Password   string `json:"password"`
+	Token      string `json:"token"`
+	DeviceId   string `json:"device_id"`
+	Name       string `json:"name"`
+	ServerAddr string `json:"server_addr"`
+	ConfigMode string `json:"config_mode"` // "params" or "file"
+	ConfigFile string `json:"config_file"`
+	Model      string `json:"model"`
+	Password   string `json:"password"`
+}
+
+type WireguardConfig struct {
+	NetworkName string `json:"network_name"`
+	ConfigFile  string `json:"config_file"`
 }
 
 const configPath = "/userdata/kvm_config.json"
 const sdConfigPath = "/mnt/sdcard/kvm_config.json"
 
+// builtOtaPublicKey is the hex-encoded Ed25519 public key for OTA signature verification,
+// injected via -ldflags at build time. Empty string disables signature verification.
+var builtOtaPublicKey = ""
+
 var defaultConfig = &Config{
 	STUN:                 "stun:stun.l.google.com:19302",
+	TurnServers:          []TurnServer{},
 	AutoUpdateEnabled:    false, // Set a default value
 	ActiveExtension:      "",
 	KeyboardMacros:       []KeyboardMacro{},
@@ -152,6 +214,7 @@ var defaultConfig = &Config{
 	DisplayOffAfterSec:   1800, // 30 minutes
 	TLSMode:              "",
 	ForceHpd:             false, // 默认不强制输出EDID
+	UsbEnhancedDetection: true,
 	UsbConfig: &usbgadget.Config{
 		VendorId:     "0x1d6b", //The Linux Foundation
 		ProductId:    "0x0104", //Multifunction Composite Gadget
@@ -167,26 +230,108 @@ var defaultConfig = &Config{
 		Audio:         false, //At any given time, only one of Audio and Mtp can be set to true
 		Mtp:           false,
 	},
-    NetworkConfig:       &network.NetworkConfig{},
-    AppliedNetworkConfig: nil,
-	DefaultLogLevel:     "INFO",
-	ZeroTierAutoStart:   false,
-	TailScaleAutoStart:  false,
-	TailScaleXEdge:      false,
-	FrpcAutoStart:       false,
+	NetworkConfig:        &network.NetworkConfig{},
+	AppliedNetworkConfig: nil,
+	DefaultLogLevel:      "INFO",
+	ZeroTierAutoStart:    false,
+	TailScaleAutoStart:   false,
+	TailScaleXEdge:       false,
+	FrpcAutoStart:        false,
 	CloudflaredAutoStart: false,
 	IO0Status:           true,
 	IO1Status:           true,
 	AudioMode:           "disabled",
+	AudioRateFactor:     0.9596,
+	HDMISwitchURL:       "http://esp-hdmi-mux.local",
 	LEDGreenMode:        "network-rx",
 	LEDYellowMode:       "kernel-activity",
 	AutoMountSystemInfo: true,
+	WireguardAutoStart:  false,
+	NpuAppEnabled:       false,
+	Firewall: &FirewallConfig{
+		Base: FirewallBaseRule{
+			InputPolicy:   "accept",
+			OutputPolicy:  "accept",
+			ForwardPolicy: "accept",
+		},
+		Rules:        []FirewallRule{},
+		PortForwards: []FirewallPortRule{},
+	},
 }
 
 var (
 	config     *Config
 	configLock = &sync.Mutex{}
 )
+
+type ConfigMigrationFunc func(raw json.RawMessage) (json.RawMessage, error)
+
+var configMigrations = []ConfigMigrationFunc{
+	migrateLocalAuthMode,
+}
+
+func migrateLocalAuthMode(raw json.RawMessage) (json.RawMessage, error) {
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return nil, fmt.Errorf("migrateLocalAuthMode: failed to parse config JSON: %w", err)
+	}
+
+	if authModeRaw, exists := rawMap["localAuthMode"]; exists {
+		var authMode string
+		if err := json.Unmarshal(authModeRaw, &authMode); err == nil {
+			if authMode != "" {
+				validModes := map[string]bool{"password": true, "noPassword": true}
+				if !validModes[authMode] {
+					rawMap["localAuthMode"] = json.RawMessage(`"password"`)
+				}
+			}
+		} else {
+			delete(rawMap, "localAuthMode")
+		}
+	}
+
+	result, err := json.Marshal(rawMap)
+	if err != nil {
+		return nil, fmt.Errorf("migrateLocalAuthMode: failed to marshal migrated config: %w", err)
+	}
+	return result, nil
+}
+
+func runMigrations(raw json.RawMessage) (json.RawMessage, bool, error) {
+	current := raw
+	didMigrate := false
+	for i, migration := range configMigrations {
+		migrated, err := migration(current)
+		if err != nil {
+			return current, didMigrate, fmt.Errorf("migration %d failed: %w", i, err)
+		}
+		if string(migrated) != string(current) {
+			didMigrate = true
+			logger.Info().Int("migration", i).Msg("config migrated")
+		}
+		current = migrated
+	}
+	return current, didMigrate, nil
+}
+
+func writeRawConfig(path string, raw json.RawMessage) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create config file: %w", err)
+	}
+	defer file.Close()
+
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, raw, "", "  "); err != nil {
+		return fmt.Errorf("failed to indent config JSON: %w", err)
+	}
+
+	if _, err := indented.WriteTo(file); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
+}
 
 func LoadConfig() {
 	configLock.Lock()
@@ -197,7 +342,6 @@ func LoadConfig() {
 		return
 	}
 
-	// load the default config
 	if defaultConfig.UsbConfig.SerialNumber == "" {
 		serialNumber, err := extractSerialNumber()
 		if err != nil {
@@ -209,24 +353,38 @@ func LoadConfig() {
 	loadedConfig := *defaultConfig
 	config = &loadedConfig
 
-	file, err := os.Open(configPath)
+	rawData, err := os.ReadFile(configPath)
 	if err != nil {
-		logger.Debug().Msg("default config file doesn't exist, using default")
+		logger.Debug().Msg("config file does not exist, using default")
 		return
 	}
-	defer file.Close()
 
-	// load and merge the default config with the user config
-	if err := json.NewDecoder(file).Decode(&loadedConfig); err != nil {
-		logger.Warn().Err(err).Msg("config file JSON parsing failed")
-		os.Remove(configPath)
-		if _, err := os.Stat(sdConfigPath); err == nil {
-			os.Remove(sdConfigPath)
+	migrated, didMigrate, err := runMigrations(json.RawMessage(rawData))
+	if err != nil {
+		logger.Warn().Err(err).Msg("config migration failed, preserving corrupt file")
+		corruptPath := configPath + ".corrupt"
+		_ = os.Rename(configPath, corruptPath)
+		logger.Info().Str("corrupt_path", corruptPath).Msg("corrupt config preserved for diagnosis")
+		return
+	}
+
+	if didMigrate {
+		if writeErr := writeRawConfig(configPath, migrated); writeErr != nil {
+			logger.Warn().Err(writeErr).Msg("failed to write migrated config, continuing with in-memory version")
+		} else {
+			logger.Info().Msg("migrated config saved to disk")
+			SyncConfigSD(false)
 		}
+	}
+
+	if err := json.Unmarshal(migrated, &loadedConfig); err != nil {
+		logger.Warn().Err(err).Msg("config file JSON parsing failed, preserving corrupt file")
+		corruptPath := configPath + ".corrupt"
+		_ = os.Rename(configPath, corruptPath)
+		logger.Info().Str("corrupt_path", corruptPath).Msg("corrupt config preserved for diagnosis")
 		return
 	}
 
-	// merge the user config with the default config
 	if loadedConfig.UsbConfig == nil {
 		loadedConfig.UsbConfig = defaultConfig.UsbConfig
 	}
@@ -237,6 +395,14 @@ func LoadConfig() {
 
 	if loadedConfig.NetworkConfig == nil {
 		loadedConfig.NetworkConfig = defaultConfig.NetworkConfig
+	}
+
+	if loadedConfig.Firewall == nil {
+		loadedConfig.Firewall = defaultConfig.Firewall
+	}
+
+	if loadedConfig.TurnServers == nil {
+		loadedConfig.TurnServers = []TurnServer{}
 	}
 
 	config = &loadedConfig
@@ -335,6 +501,14 @@ func SaveConfig() error {
 	SyncConfigSD(false)
 
 	return nil
+}
+
+func generateAPIKey() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }
 
 func ensureConfigLoaded() {

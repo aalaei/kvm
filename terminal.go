@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/coder/websocket"
 	"github.com/creack/pty"
+	"github.com/gin-gonic/gin"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -93,4 +95,81 @@ func handleTerminalChannel(d *webrtc.DataChannel) {
 	d.OnError(func(err error) {
 		scopedLogger.Warn().Err(err).Msg("Terminal channel error")
 	})
+}
+
+func handleTerminalWS(c *gin.Context) {
+	source := c.ClientIP()
+	scopedLogger := terminalLogger.With().
+		Str("transport", "websocket").
+		Str("source", source).
+		Logger()
+
+	wsCon, err := websocket.Accept(c.Writer, c.Request, &websocket.AcceptOptions{
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		c.Status(500)
+		return
+	}
+	defer wsCon.Close(websocket.StatusNormalClosure, "")
+
+	cmd := exec.Command("/bin/sh")
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		scopedLogger.Warn().Err(err).Msg("Failed to start pty")
+		wsCon.Close(websocket.StatusInternalError, "")
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 1024)
+		for {
+			n, readErr := ptmx.Read(buf)
+			if readErr != nil {
+				if readErr != io.EOF {
+					scopedLogger.Warn().Err(readErr).Msg("Failed to read from pty")
+				}
+				return
+			}
+			if writeErr := wsCon.Write(ctx, websocket.MessageBinary, buf[:n]); writeErr != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		msgType, data, readErr := wsCon.Read(ctx)
+		if readErr != nil {
+			break
+		}
+
+		if msgType == websocket.MessageText {
+			maybeJson := bytes.TrimSpace(data)
+			if len(maybeJson) > 1 && maybeJson[0] == '{' && maybeJson[len(maybeJson)-1] == '}' {
+				var size TerminalSize
+				if err := json.Unmarshal(maybeJson, &size); err == nil {
+					if err := pty.Setsize(ptmx, &pty.Winsize{
+						Rows: uint16(size.Rows),
+						Cols: uint16(size.Cols),
+					}); err == nil {
+						continue
+					}
+				}
+			}
+		}
+
+		if _, err := ptmx.Write(data); err != nil {
+			break
+		}
+	}
+
+	_ = ptmx.Close()
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	<-done
 }

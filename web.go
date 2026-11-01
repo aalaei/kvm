@@ -12,6 +12,7 @@ import (
 	"net/http/pprof"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"os/exec"
 
@@ -86,10 +87,16 @@ func setupRouter() *gin.Engine {
 	// By enabling caching, we ensure that pre-loaded images are stored in the browser cache
 	// This allows for a smoother enter animation and improved user experience on the welcome screen
 	r.Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		c.Header("Pragma", "no-cache")
+		c.Header("Expires", "0")
+
 		if strings.HasPrefix(c.Request.URL.Path, "/static/") {
 			ext := filepath.Ext(c.Request.URL.Path)
 			if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" {
 				c.Header("Cache-Control", "public, max-age=300") // Cache for 5 minutes
+				c.Header("Pragma", "")
+				c.Header("Expires", "")
 			}
 		}
 		c.Next()
@@ -161,6 +168,11 @@ func setupRouter() *gin.Engine {
 		protected.POST("/storage/upload", handleUploadHttp)
 		protected.GET("/storage/download", handleDownloadHttp)
 		protected.GET("/storage/sd-download", handleSDDownloadHttp)
+		protected.POST("/api/rpc", handleRpcRequest)
+		protected.GET("/api/ice-servers", handleGetIceServers)
+		protected.GET("/terminal/ws", handleTerminalWS)
+		protected.GET("/serial/ws", handleSerialWS)
+		protected.GET("/video/stream", handleVideoStream)
 	}
 
 	// API endpoints for external integrations (protected via Basic Auth)
@@ -183,8 +195,16 @@ func setupRouter() *gin.Engine {
 	return r
 }
 
-// TODO: support multiple sessions?
 var currentSession *Session
+
+var (
+	currentHTTPSessionID    string
+	httpSessionToNotify     string
+	httpSessionMu           sync.Mutex
+	httpSessionLockVersion  int64
+	httpSessionSeenVersions map[string]int64
+	invalidHTTPSessions     map[string]bool
+)
 
 func handleWebRTCSession(c *gin.Context) {
 	var req WebRTCSessionRequest
@@ -430,6 +450,14 @@ func handleLogin(c *gin.Context) {
 		return
 	}
 
+	ip := c.ClientIP()
+	if allowed, wait := CheckRateLimit(ip); !allowed {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": fmt.Sprintf("Too many failed attempts. Please try again in %s", wait.Round(time.Second)),
+		})
+		return
+	}
+
 	var req LoginRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -439,14 +467,17 @@ func handleLogin(c *gin.Context) {
 
 	err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(req.Password))
 	if err != nil {
+		RecordFailure(ip)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid password"})
 		return
 	}
 
+	RecordSuccess(ip)
+
 	config.LocalAuthToken = uuid.New().String()
 
-	// Set the cookie
-	c.SetCookie("authToken", config.LocalAuthToken, 7*24*60*60, "/", "", false, true)
+	// Set the cookie (Session cookie, expires on browser close)
+	c.SetCookie("authToken", config.LocalAuthToken, 0, "/", "", false, true)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Login successful"})
 }
@@ -514,11 +545,20 @@ func basicAuthProtectedMiddleware(requireDeveloperMode bool) gin.HandlerFunc {
 			return
 		}
 
+		ip := c.ClientIP()
+		if allowed, wait := CheckRateLimit(ip); !allowed {
+			sendErrorJsonThenAbort(c, http.StatusTooManyRequests, fmt.Sprintf("Too many failed attempts. Please try again in %s", wait.Round(time.Second)))
+			return
+		}
+
 		err := bcrypt.CompareHashAndPassword([]byte(config.HashedPassword), []byte(password))
 		if err != nil {
+			RecordFailure(ip)
 			sendErrorJsonThenAbort(c, http.StatusUnauthorized, "Invalid password")
 			return
 		}
+
+		RecordSuccess(ip)
 
 		c.Next()
 	}
@@ -584,8 +624,8 @@ func handleCreatePassword(c *gin.Context) {
 		return
 	}
 
-	// Set the cookie
-	c.SetCookie("authToken", config.LocalAuthToken, 7*24*60*60, "/", "", false, true)
+	// Set the cookie (Session cookie, expires on browser close)
+	c.SetCookie("authToken", config.LocalAuthToken, 0, "/", "", false, true)
 
 	c.JSON(http.StatusCreated, gin.H{"message": "Password set successfully"})
 }
@@ -627,8 +667,8 @@ func handleUpdatePassword(c *gin.Context) {
 		return
 	}
 
-	// Set the cookie
-	c.SetCookie("authToken", config.LocalAuthToken, 7*24*60*60, "/", "", false, true)
+	// Set the cookie (Session cookie, expires on browser close)
+	c.SetCookie("authToken", config.LocalAuthToken, 0, "/", "", false, true)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password updated successfully"})
 }
@@ -780,8 +820,8 @@ func handleSetup(c *gin.Context) {
 		config.HashedPassword = string(hashedPassword)
 		config.LocalAuthToken = uuid.New().String()
 
-		// Set the cookie
-		c.SetCookie("authToken", config.LocalAuthToken, 7*24*60*60, "/", "", false, true)
+		// Set the cookie (Session cookie, expires on browser close)
+		c.SetCookie("authToken", config.LocalAuthToken, 0, "/", "", false, true)
 	} else {
 		// For noPassword mode, ensure the password field is empty
 		config.HashedPassword = ""
@@ -795,4 +835,194 @@ func handleSetup(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Device setup completed successfully"})
+}
+
+func handleRpcRequest(c *gin.Context) {
+	var req JSONRPCRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON RPC request"})
+		return
+	}
+	sessionID := c.GetHeader("X-Session-ID")
+	if sessionID == "" {
+		var err error
+		sessionID, err = c.Cookie("httpSessionId")
+		if err != nil || sessionID == "" {
+			sessionID = uuid.New().String()
+			c.SetCookie("httpSessionId", sessionID, 7*24*60*60, "/", "", false, false)
+		}
+	}
+
+	var event *JSONRPCEvent
+
+	httpSessionMu.Lock()
+	if httpSessionSeenVersions == nil {
+		httpSessionSeenVersions = make(map[string]int64)
+	}
+
+	if invalidHTTPSessions == nil {
+		invalidHTTPSessions = make(map[string]bool)
+	}
+
+	invalid := false
+
+	if req.Method == "confirmOtherSession" {
+		httpSessionLockVersion++
+		currentHTTPSessionID = sessionID
+		httpSessionToNotify = ""
+		httpSessionSeenVersions[sessionID] = httpSessionLockVersion
+
+		for id := range httpSessionSeenVersions {
+			if id == sessionID {
+				delete(invalidHTTPSessions, id)
+				continue
+			}
+			invalidHTTPSessions[id] = true
+		}
+
+		//logger.Info().
+		//	Str("sessionID", sessionID).
+		//	Str("currentHTTPSessionID", currentHTTPSessionID).
+		//	Str("httpSessionToNotify", httpSessionToNotify).
+		//	Int64("httpSessionLockVersion", httpSessionLockVersion).
+		//	Str("rpcMethod", req.Method).
+		//	Msg("handleRpcRequest confirmOtherSession")
+	} else {
+		if invalidHTTPSessions[sessionID] {
+			invalid = true
+			event = &JSONRPCEvent{
+				JSONRPC: "2.0",
+				Method:  "sessionInvalidated",
+			}
+		} else {
+			if _, ok := httpSessionSeenVersions[sessionID]; !ok {
+				httpSessionSeenVersions[sessionID] = httpSessionLockVersion
+			}
+
+			//logger.Info().
+			//	Str("sessionID", sessionID).
+			//	Str("currentHTTPSessionID", currentHTTPSessionID).
+			//	Str("httpSessionToNotify", httpSessionToNotify).
+			//	Int64("httpSessionLockVersion", httpSessionLockVersion).
+			//	Str("rpcMethod", req.Method).
+			//	Msg("handleRpcRequest before session check")
+
+			if currentHTTPSessionID == "" {
+				currentHTTPSessionID = sessionID
+			} else if sessionID == httpSessionToNotify {
+				event = &JSONRPCEvent{
+					JSONRPC: "2.0",
+					Method:  "otherSessionConnected",
+				}
+				httpSessionToNotify = ""
+			} else if sessionID != currentHTTPSessionID {
+				if version, ok := httpSessionSeenVersions[sessionID]; ok && version >= httpSessionLockVersion {
+					httpSessionToNotify = currentHTTPSessionID
+					currentHTTPSessionID = sessionID
+				}
+			}
+
+			//logger.Info().
+			//	Str("sessionID", sessionID).
+			//	Str("currentHTTPSessionID", currentHTTPSessionID).
+			//	Str("httpSessionToNotify", httpSessionToNotify).
+			//	Int64("httpSessionLockVersion", httpSessionLockVersion).
+			//	Bool("hasEvent", event != nil).
+			//	Str("rpcMethod", req.Method).
+			//	Msg("handleRpcRequest after session check")
+		}
+	}
+	httpSessionMu.Unlock()
+
+	if invalid {
+		response := JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error: map[string]interface{}{
+				"code":    -32001,
+				"message": "Session invalidated",
+			},
+			ID: req.ID,
+		}
+
+		if event != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"response": response,
+				"event":    event,
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, response)
+		return
+	}
+
+	response, _ := DispatchRPCRequest(req)
+
+	if event != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"response": response,
+			"event":    event,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func handleGetIceServers(c *gin.Context) {
+	LoadConfig()
+	servers, err := rpcGetIceServers()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"iceServers": servers})
+}
+
+func handleVideoStream(c *gin.Context) {
+	logger.Info().Msg("HTTP video stream request received")
+
+	c.Header("Content-Type", "video/x-h264")
+	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+
+	// Flush headers immediately so client knows the connection is established
+	c.Writer.Flush()
+	logger.Info().Msg("HTTP video stream headers flushed, waiting for video data")
+
+	id, ch := videoBroadcaster.Subscribe()
+	logger.Info().Str("subscriber_id", id).Msg("subscribed to video broadcaster")
+	defer func() {
+		videoBroadcaster.Unsubscribe(id)
+		logger.Info().Str("subscriber_id", id).Msg("unsubscribed from video broadcaster")
+	}()
+
+	ctx := c.Request.Context()
+	frameCount := 0
+
+	for {
+		select {
+		case frame, ok := <-ch:
+			if !ok {
+				logger.Info().Int("total_frames", frameCount).Msg("video broadcaster channel closed")
+				return
+			}
+			data := frame.Data()
+			frameCount++
+			if frameCount == 1 {
+				logger.Info().Int("size", len(data)).Msg("first video frame received")
+			}
+			if _, err := c.Writer.Write(data); err != nil {
+				logger.Warn().Err(err).Int("total_frames", frameCount).Msg("error writing video data")
+				frame.Release()
+				return
+			}
+			c.Writer.Flush()
+			frame.Release()
+		case <-ctx.Done():
+			logger.Info().Int("total_frames", frameCount).Msg("client disconnected")
+			return
+		}
+	}
 }

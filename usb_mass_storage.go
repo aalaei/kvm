@@ -1,6 +1,7 @@
 package kvm
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -781,6 +782,117 @@ func rpcUnmountSDStorage() error {
 	return nil
 }
 
+func rpcFormatSDStorage(confirm bool, fsType string) error {
+	validFsTypes := map[string]bool{"exfat": true, "fat32": true}
+	if !validFsTypes[fsType] {
+		fsType = "fat32"
+	}
+	if !confirm {
+		return fmt.Errorf("format not confirmed")
+	}
+	if _, err := os.Stat("/dev/mmcblk1"); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("sd device not found: /dev/mmcblk1")
+		}
+		return fmt.Errorf("failed to stat sd device: %w", err)
+	}
+
+	if err := updateMtp(false); err != nil {
+		logger.Error().Err(err).Msg("failed to update mtp before formatting sd")
+	}
+
+	if out, err := exec.Command("mount").Output(); err == nil {
+		if strings.Contains(string(out), " on /mnt/sdcard") {
+			if umOut, umErr := exec.Command("umount", "/mnt/sdcard").CombinedOutput(); umErr != nil {
+				return fmt.Errorf("failed to unmount sdcard: %w: %s", umErr, strings.TrimSpace(string(umOut)))
+			}
+		}
+	}
+
+	if err := os.MkdirAll(SDImagesFolder, 0755); err != nil {
+		return fmt.Errorf("failed to ensure mount point: %w", err)
+	}
+
+	if _, err := os.Stat("/dev/mmcblk1p1"); os.IsNotExist(err) {
+		var lastErr error
+		if _, err := exec.LookPath("sfdisk"); err == nil {
+			sfdiskInput := "label: dos\nunit: sectors\n\n2048,,c,*\n"
+			cmd := exec.Command("sfdisk", "/dev/mmcblk1")
+			cmd.Stdin = bytes.NewBufferString(sfdiskInput)
+			partOut, partErr := cmd.CombinedOutput()
+			if partErr != nil {
+				lastErr = fmt.Errorf("sfdisk failed: %w: %s", partErr, strings.TrimSpace(string(partOut)))
+			} else {
+				lastErr = nil
+			}
+		} else if _, err := exec.LookPath("fdisk"); err == nil {
+			fdiskScript := "o\nn\np\n1\n2048\n\nt\n1\nc\na\n1\nw\n"
+			cmd := exec.Command("fdisk", "/dev/mmcblk1")
+			cmd.Stdin = bytes.NewBufferString(fdiskScript)
+			partOut, partErr := cmd.CombinedOutput()
+			if partErr != nil {
+				lastErr = fmt.Errorf("fdisk failed: %w: %s", partErr, strings.TrimSpace(string(partOut)))
+			} else {
+				lastErr = nil
+			}
+		} else if _, err := exec.LookPath("parted"); err == nil {
+			partedOut, partedErr := exec.Command("parted", "-s", "/dev/mmcblk1", "mklabel", "msdos", "mkpart", "primary", "fat32", "1MiB", "100%").CombinedOutput()
+			if partedErr != nil {
+				lastErr = fmt.Errorf("parted failed: %w: %s", partedErr, strings.TrimSpace(string(partedOut)))
+			} else {
+				lastErr = nil
+			}
+		} else {
+			return fmt.Errorf("no partitioning tool found (need sfdisk, fdisk, or parted)")
+		}
+
+		if lastErr != nil {
+			return fmt.Errorf("failed to create sd partition: %w", lastErr)
+		}
+
+		if _, err := exec.LookPath("partprobe"); err == nil {
+			if _, err := exec.Command("partprobe", "/dev/mmcblk1").CombinedOutput(); err != nil {
+				time.Sleep(800 * time.Millisecond)
+			} else {
+				time.Sleep(300 * time.Millisecond)
+			}
+		} else {
+			time.Sleep(800 * time.Millisecond)
+		}
+	}
+
+	if _, err := os.Stat("/dev/mmcblk1p1"); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("sd partition not found after partitioning: /dev/mmcblk1p1")
+		}
+		return fmt.Errorf("failed to stat sd partition: %w", err)
+	}
+
+	var mkfsCmd *exec.Cmd
+	if fsType == "exfat" {
+		mkfsCmd = exec.Command("mkfs.exfat", "-n", "PICOKVM", "/dev/mmcblk1p1")
+	} else {
+		mkfsCmd = exec.Command("mkfs.vfat", "-F", "32", "-n", "PICOKVM", "/dev/mmcblk1p1")
+	}
+	mkfsOut, mkfsErr := mkfsCmd.CombinedOutput()
+	if mkfsErr != nil {
+		return fmt.Errorf("failed to format sdcard: %w: %s", mkfsErr, strings.TrimSpace(string(mkfsOut)))
+	}
+
+	mountOut, mountErr := exec.Command("mount", "/dev/mmcblk1p1", SDImagesFolder).CombinedOutput()
+	if mountErr != nil {
+		return fmt.Errorf("failed to mount sdcard after format: %w: %s", mountErr, strings.TrimSpace(string(mountOut)))
+	}
+
+	SyncConfigSD(false)
+
+	if err := updateMtp(true); err != nil {
+		return fmt.Errorf("failed to update mtp after formatting sd: %w", err)
+	}
+
+	return nil
+}
+
 func rpcListSDStorageFiles() (*StorageFiles, error) {
 	files, err := os.ReadDir(SDImagesFolder)
 	if err != nil {
@@ -842,6 +954,7 @@ const (
 
 type SDMountStatusResponse struct {
 	Status SDMountStatus `json:"status"`
+	Reason string        `json:"reason,omitempty"`
 }
 
 func rpcGetSDMountStatus() (*SDMountStatusResponse, error) {
@@ -849,9 +962,13 @@ func rpcGetSDMountStatus() (*SDMountStatusResponse, error) {
 		return &SDMountStatusResponse{Status: SDMountNone}, nil
 	}
 
+	if _, err := os.Stat("/dev/mmcblk1p1"); os.IsNotExist(err) {
+		return &SDMountStatusResponse{Status: SDMountFail, Reason: "no_partition"}, nil
+	}
+
 	output, err := exec.Command("mount").Output()
 	if err != nil {
-		return &SDMountStatusResponse{Status: SDMountFail}, fmt.Errorf("failed to check mount status: %v", err)
+		return &SDMountStatusResponse{Status: SDMountFail, Reason: "check_mount_failed"}, fmt.Errorf("failed to check mount status: %v", err)
 	}
 
 	if strings.Contains(string(output), "/dev/mmcblk1p1 on /mnt/sdcard") {
@@ -860,19 +977,19 @@ func rpcGetSDMountStatus() (*SDMountStatusResponse, error) {
 
 	err = exec.Command("mount", "/dev/mmcblk1p1", "/mnt/sdcard").Run()
 	if err != nil {
-		return &SDMountStatusResponse{Status: SDMountFail}, fmt.Errorf("failed to mount SD card: %v", err)
+		return &SDMountStatusResponse{Status: SDMountFail, Reason: "mount_failed"}, fmt.Errorf("failed to mount SD card: %v", err)
 	}
 
 	output, err = exec.Command("mount").Output()
 	if err != nil {
-		return &SDMountStatusResponse{Status: SDMountFail}, fmt.Errorf("failed to check mount status after mounting: %v", err)
+		return &SDMountStatusResponse{Status: SDMountFail, Reason: "check_mount_after_failed"}, fmt.Errorf("failed to check mount status after mounting: %v", err)
 	}
 
 	if strings.Contains(string(output), "/dev/mmcblk1p1 on /mnt/sdcard") {
 		return &SDMountStatusResponse{Status: SDMountOK}, nil
 	}
 
-	return &SDMountStatusResponse{Status: SDMountFail}, nil
+	return &SDMountStatusResponse{Status: SDMountFail, Reason: "mount_unknown"}, nil
 }
 
 type SDStorageFileUpload struct {
@@ -984,21 +1101,13 @@ usb_max_packet_size 0x200
 	return os.WriteFile(umtprdConfPath, []byte(conf), 0644)
 }
 
-func updateMtpWithSDStatus() error {
-	resp, _ := rpcGetSDMountStatus()
-	if resp.Status == SDMountOK {
-		if err := writeUmtprdConfFile(true); err != nil {
-			logger.Error().Err(err).Msg("failed to write umtprd conf file")
-		}
-	} else {
-		if err := writeUmtprdConfFile(false); err != nil {
-			logger.Error().Err(err).Msg("failed to write umtprd conf file")
-		}
+func updateMtp(withSD bool) error {
+	if err := writeUmtprdConfFile(withSD); err != nil {
+		logger.Error().Err(err).Msg("failed to write umtprd conf file")
 	}
-
 	if config.UsbDevices.Mtp {
-		if err := gadget.UnbindUDCToDWC3(); err != nil {
-			logger.Error().Err(err).Msg("failed to unbind UDC")
+		if err := gadget.UnbindUDC(); err != nil {
+			logger.Error().Err(err).Msg("failed to unbind gadget from UDC")
 		}
 
 		if out, err := exec.Command("pgrep", "-x", "umtprd").Output(); err == nil && len(out) > 0 {
@@ -1013,10 +1122,29 @@ func updateMtpWithSDStatus() error {
 			return fmt.Errorf("failed to exec binary: %w", err)
 		}
 
-		if err := rpcSetUsbDevices(*config.UsbDevices); err != nil {
-			return fmt.Errorf("failed to set usb devices: %w", err)
+		var lastErr error
+		for attempt := 0; attempt < 6; attempt++ {
+			if err := rpcSetUsbDevices(*config.UsbDevices); err == nil {
+				lastErr = nil
+				break
+			} else {
+				lastErr = err
+				logger.Warn().
+					Int("attempt", attempt+1).
+					Err(err).
+					Msg("failed to re-apply usb devices after mtp update, retrying")
+				time.Sleep(time.Duration(300*(attempt+1)) * time.Millisecond)
+			}
+		}
+		if lastErr != nil {
+			return fmt.Errorf("failed to set usb devices after mtp update: %w", lastErr)
 		}
 	}
 
 	return nil
+}
+
+func updateMtpWithSDStatus() error {
+	resp, _ := rpcGetSDMountStatus()
+	return updateMtp(resp.Status == SDMountOK)
 }

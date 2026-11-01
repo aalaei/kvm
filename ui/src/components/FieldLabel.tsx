@@ -27,7 +27,7 @@ export default function FieldLabel({
       >
         {label}
         {description && (
-          <span className="my-0.5 text-[13px] font-normal text-slate-600 dark:text-slate-400">
+          <span className="my-0.5 text-[13px] font-normal text-slate-600 dark:text-[#ffffff]">
             {description}
           </span>
         )}
@@ -40,7 +40,7 @@ export default function FieldLabel({
           {label}
         </span>
         {description && (
-          <span className="my-0.5 text-[13px] font-normal text-slate-600 dark:text-slate-400">
+          <span className="my-0.5 text-[13px] font-normal text-slate-600 dark:text-[#ffffff]">
             {description}
           </span>
         )}

@@ -58,14 +58,22 @@ module.exports = defineConfig([{
     },
 
     rules: {
-        "react-refresh/only-export-components": ["warn", {
-            allowConstantExport: true,
+        "react-refresh/only-export-components": "off",
+
+        "react/prop-types": "off",
+
+        "@typescript-eslint/no-explicit-any": "off",
+        "@typescript-eslint/no-unused-vars": "off",
+
+        "react-hooks/exhaustive-deps": "off",
+
+        "import/no-unresolved": ["error", {
+            ignore: [
+                "\\.svg\\?react$",
+            ],
         }],
 
-        "import/order": ["error", {
-            groups: ["builtin", "external", "internal", "parent", "sibling"],
-            "newlines-between": "always",
-        }],
+        "import/order": "off",
     },
 
     settings: {

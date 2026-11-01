@@ -3,12 +3,15 @@ package kvm
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"kvm/internal/usbgadget"
 )
 
 var gadget *usbgadget.UsbGadget
+var reinitLock sync.Mutex
+var isReinitializing bool
 
 // initUsbGadget initializes the USB gadget.
 // call it only after the config is loaded.
@@ -34,7 +37,7 @@ func initUsbGadget() {
 	go func() {
 		for {
 			checkUSBState()
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(2500 * time.Millisecond)
 		}
 	}()
 
@@ -57,6 +60,13 @@ func initUsbGadget() {
 				"error":  err.Error(),
 			}, currentSession)
 		}
+
+		go func() {
+			usbLogger.Info().Str("device", device).Msg("Attempting to reinitialize USB gadget due to missing HID device")
+			if err := rpcReinitializeUsbGadget(); err != nil {
+				usbLogger.Error().Err(err).Msg("Failed to auto-reinitialize USB gadget")
+			}
+		}()
 	})
 
 	// open the keyboard hid file to listen for keyboard events
@@ -101,6 +111,14 @@ func rpcKeyboardReport(modifier uint8, keys []uint8) error {
 	return gadget.KeyboardReport(modifier, keys)
 }
 
+func rpcKeypressReport(key uint8, press bool) error {
+	return gadget.KeypressReport(key, press)
+}
+
+func rpcKeypressKeepAlive() error {
+	return gadget.KeypressKeepAlive()
+}
+
 func rpcAbsMouseReport(x, y int, buttons uint8) error {
 	return gadget.AbsMouseReport(x, y, buttons)
 }
@@ -120,7 +138,7 @@ func rpcGetKeyboardLedState() (state usbgadget.KeyboardState) {
 var usbState = "unknown"
 
 func rpcGetUSBState() (state string) {
-	return gadget.GetUsbState()
+	return gadget.GetUsbState(config.UsbEnhancedDetection)
 }
 
 func triggerUSBStateUpdate() {
@@ -134,7 +152,7 @@ func triggerUSBStateUpdate() {
 }
 
 func checkUSBState() {
-	newState := gadget.GetUsbState()
+	newState := gadget.GetUsbState(config.UsbEnhancedDetection)
 	if newState == usbState {
 		return
 	}
@@ -155,6 +173,21 @@ func rpcSendUsbWakeupSignal() error {
 
 // rpcReinitializeUsbGadget reinitializes the USB gadget
 func rpcReinitializeUsbGadget() error {
+	reinitLock.Lock()
+	if isReinitializing {
+		reinitLock.Unlock()
+		usbLogger.Warn().Msg("USB gadget reinitialization already in progress, skipping")
+		return nil
+	}
+	isReinitializing = true
+	reinitLock.Unlock()
+
+	defer func() {
+		reinitLock.Lock()
+		isReinitializing = false
+		reinitLock.Unlock()
+	}()
+
 	usbLogger.Info().Msg("reinitializing USB gadget (hard)")
 
 	if gadget == nil {
@@ -195,6 +228,13 @@ func rpcReinitializeUsbGadget() error {
 				"error":  err.Error(),
 			}, currentSession)
 		}
+
+		go func() {
+			usbLogger.Info().Str("device", device).Msg("Attempting to reinitialize USB gadget due to missing HID device")
+			if err := rpcReinitializeUsbGadget(); err != nil {
+				usbLogger.Error().Err(err).Msg("Failed to auto-reinitialize USB gadget")
+			}
+		}()
 	})
 
 	// Reopen keyboard HID file

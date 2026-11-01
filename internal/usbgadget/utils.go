@@ -2,10 +2,13 @@ package usbgadget
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -106,4 +109,37 @@ func (u *UsbGadget) resetLogSuppressionCounter(counterName string) {
 	if _, ok := u.logSuppressionCounter[counterName]; !ok {
 		u.logSuppressionCounter[counterName] = 0
 	}
+}
+
+const hidWriteTimeout = 50 * time.Millisecond
+
+func (u *UsbGadget) writeWithTimeout(file *os.File, data []byte) (n int, err error) {
+	if err := file.SetWriteDeadline(time.Now().Add(hidWriteTimeout)); err != nil {
+		return -1, err
+	}
+
+	n, err = file.Write(data)
+	if err == nil {
+		return
+	}
+
+	u.log.Trace().
+		Str("file", file.Name()).
+		Bytes("data", data).
+		Err(err).
+		Msg("write failed")
+
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		u.logWithSupression(
+			fmt.Sprintf("writeWithTimeout_%s", file.Name()),
+			1000,
+			u.log,
+			err,
+			"write timed out: %s",
+			file.Name(),
+		)
+		err = nil
+	}
+
+	return
 }

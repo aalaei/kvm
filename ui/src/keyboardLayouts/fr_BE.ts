@@ -1,6 +1,8 @@
-import { KeyCombo } from "../keyboardLayouts"
+import { KeyboardLayout, KeyCombo } from "../keyboardLayouts"
+import { modifierDisplayMap, keyDisplayMap, virtualKeyboard } from "./en_US"
 
-export const name = "Belgisch Nederlands";
+const name = "Belgisch Nederlands";
+const isoCode = "fr-BE";
 
 const keyTrema = { key: "BracketLeft", shift: true } // tréma (umlaut), two dots placed above a vowel
 const keyHat = { key: "BracketLeft" } // accent circonflexe (accent hat), mark ^ placed above the letter
@@ -56,10 +58,10 @@ export const chars = {
   "Ù": { key: "KeyU", shift: true, accentKey: keyGrave },
   "Ũ": { key: "KeyU", shift: true, accentKey: keyTilde },
   V: { key: "KeyV", shift: true },
-  W: { key: "KeyW", shift: true },
+  W: { key: "KeyZ", shift: true },
   X: { key: "KeyX", shift: true },
-  Y: { key: "KeyZ", shift: true },
-  Z: { key: "KeyY", shift: true },
+  Y: { key: "KeyY", shift: true },
+  Z: { key: "KeyW", shift: true },
   a: { key: "KeyQ" },
   "ä": { key: "KeyQ", accentKey: keyTrema },
   "â": { key: "KeyQ", accentKey: keyHat },
@@ -104,10 +106,10 @@ export const chars = {
   "ú": { key: "KeyU", accentKey: keyAcute },
   "ũ": { key: "KeyU", accentKey: keyTilde },
   v: { key: "KeyV" },
-  w: { key: "KeyW" },
+  w: { key: "KeyZ" },
   x: { key: "KeyX" },
-  y: { key: "KeyZ" },
-  z: { key: "KeyY" },
+  y: { key: "KeyY" },
+  z: { key: "KeyW" },
   "²": { key: "Backquote" },
   "³": { key: "Backquote", shift: true },
   "&": { key: "Digit1" },
@@ -165,3 +167,28 @@ export const chars = {
   Enter: { key: "Enter" },
   Tab: { key: "Tab" },
 } as Record<string, KeyCombo>;
+
+const fr_BE_keyDisplayMap = {
+  ...keyDisplayMap,
+  KeyA: "q",
+  KeyQ: "a",
+  KeyW: "z",
+  KeyZ: "w",
+  Semicolon: "m",
+  KeyM: ",",
+  "(KeyA)": "Q",
+  "(KeyQ)": "A",
+  "(KeyW)": "Z",
+  "(KeyZ)": "W",
+  "(Semicolon)": "M",
+  "(KeyM)": "?",
+} as Record<string, string>;
+
+export const fr_BE: KeyboardLayout = {
+  isoCode,
+  name,
+  chars,
+  keyDisplayMap: fr_BE_keyDisplayMap,
+  modifierDisplayMap,
+  virtualKeyboard,
+};

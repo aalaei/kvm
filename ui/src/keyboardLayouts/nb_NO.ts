@@ -1,6 +1,8 @@
-import { KeyCombo } from "../keyboardLayouts"
+import { KeyboardLayout, KeyCombo } from "../keyboardLayouts"
+import { modifierDisplayMap, keyDisplayMap, virtualKeyboard } from "./en_US"
 
-export const name = "Norsk bokmål";
+const name = "Norsk bokmål";
+const isoCode = "nb-NO";
 
 const keyTrema = { key: "BracketRight" } // tréma (umlaut), two dots placed above a vowel
 const keyAcute = { key: "Equal", altRight: true } // accent aigu (acute accent), mark ´ placed above the letter
@@ -58,8 +60,8 @@ export const chars = {
   V: { key: "KeyV", shift: true },
   W: { key: "KeyW", shift: true },
   X: { key: "KeyX", shift: true },
-  Y: { key: "KeyZ", shift: true },
-  Z: { key: "KeyY", shift: true },
+  Y: { key: "KeyY", shift: true },
+  Z: { key: "KeyZ", shift: true },
   a: { key: "KeyA" },
   "ä": { key: "KeyA", accentKey: keyTrema },
   "á": { key: "KeyA", accentKey: keyAcute },
@@ -110,8 +112,8 @@ export const chars = {
   v: { key: "KeyV" },
   w: { key: "KeyW" },
   x: { key: "KeyX" },
-  y: { key: "KeyZ" },
-  z: { key: "KeyY" },
+  y: { key: "KeyY" },
+  z: { key: "KeyZ" },
   "|": { key: "Backquote" }, 
   "§": { key: "Backquote", shift: true },
   1: { key: "Digit1" },
@@ -165,3 +167,12 @@ export const chars = {
   Enter: { key: "Enter" },
   Tab: { key: "Tab" },
 } as Record<string, KeyCombo>;
+
+export const nb_NO: KeyboardLayout = {
+  isoCode,
+  name,
+  chars,
+  keyDisplayMap,
+  modifierDisplayMap,
+  virtualKeyboard,
+};

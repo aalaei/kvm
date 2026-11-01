@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/gwatts/rootcerts"
 )
 
@@ -16,6 +17,20 @@ var appCtx context.Context
 func Main() {
 	SyncConfigSD(true)
 	LoadConfig()
+
+	if config.APIKey == "" {
+		key, err := generateAPIKey()
+		if err != nil {
+			logger.Warn().Err(err).Msg("failed to generate API key")
+		} else {
+			config.APIKey = key
+			if err := SaveConfig(); err != nil {
+				logger.Warn().Err(err).Msg("failed to save API key to config")
+			} else {
+				logger.Info().Msg("generated new API key")
+			}
+		}
+	}
 
 	var cancel context.CancelFunc
 	appCtx, cancel = context.WithCancel(context.Background())
@@ -26,14 +41,20 @@ func Main() {
 		logger.Warn().Err(err).Msg("failed to get local version")
 	}
 
+	minRequiredSystemVersion := semver.MustParse("0.1.4")
+	isNewEnoughSystem := systemVersionLocal != nil && !systemVersionLocal.LessThan(minRequiredSystemVersion)
+
 	logger.Info().
 		Interface("system_version", systemVersionLocal).
 		Interface("app_version", appVersionLocal).
 		Msg("starting KVM")
 
-	//go runWatchdog()
+	go watchAdcKeysLongPressReset(appCtx)
+	go runWatchdog()
 	go confirmCurrentSystem() //A/B system
-	go setForceHpd()
+	if isNewEnoughSystem {
+		go setForceHpd()
+	}
 
 	http.DefaultClient.Timeout = 1 * time.Minute
 
@@ -49,6 +70,10 @@ func Main() {
 	if err := initNetwork(); err != nil {
 		logger.Error().Err(err).Msg("failed to initialize network")
 		os.Exit(1)
+	}
+
+	if err := ApplyFirewallConfig(config.Firewall); err != nil {
+		logger.Warn().Err(err).Msg("failed to apply firewall config")
 	}
 
 	// Initialize time sync
@@ -76,6 +101,20 @@ func Main() {
 
 	// Start RTSP server (serves H264 over TCP interleaved on :8554)
 	go StartRTSPServer()
+
+	// Set up callbacks for HTTP video stream subscribers
+	videoBroadcaster.onFirstSubscribe = func() {
+		if actionSessions == 0 {
+			logger.Info().Msg("First HTTP video subscriber connected, starting video stream")
+			_ = writeCtrlAction("start_video")
+		}
+	}
+	videoBroadcaster.onLastUnsubscribe = func() {
+		if actionSessions == 0 {
+			logger.Info().Msg("Last HTTP video subscriber disconnected, stopping video stream")
+			_ = writeCtrlAction("stop_video")
+		}
+	}
 
 	// Initialize native audio socket server
 	StartAudioCtrlSocketServer()
@@ -112,28 +151,33 @@ func Main() {
 		}
 	}()
 
-	// initialize usb gadget
-	initUsbGadget()
+	if isNewEnoughSystem {
+		// initialize usb gadget
+		initUsbGadget()
+
+		if err := setInitialVirtualMediaState(); err != nil {
+			logger.Warn().Err(err).Msg("failed to set initial virtual media state")
+		}
+
+		if err := initImagesFolder(); err != nil {
+			logger.Warn().Err(err).Msg("failed to init images folder")
+		}
+		initJiggler()
+
+		initSystemInfo()
+	}
 
 	// initialize GPIO
 	initGPIO()
 
-	if err := setInitialVirtualMediaState(); err != nil {
-		logger.Warn().Err(err).Msg("failed to set initial virtual media state")
-	}
-
-	if err := initImagesFolder(); err != nil {
-		logger.Warn().Err(err).Msg("failed to init images folder")
-	}
-	initJiggler()
+	// Start HDMI switch monitor
+	initHDMISwitch()
 
 	// initialize display
 	initDisplay()
 
 	// Initialize VPN
 	initVPN()
-
-	initSystemInfo()
 
 	//Auto update
 	//go func() {
@@ -158,6 +202,15 @@ func Main() {
 	//}()
 	//go RunFuseServer()
 	go RunWebServer()
+
+	// API and MCP services temporarily disabled for debugging
+	go func() {
+		StartAPIServer(8080)
+	}()
+
+	go func() {
+		StartMCP(8081, false)
+	}()
 
 	go RunWebSecureServer()
 	// Web secure server is started only if TLS mode is enabled

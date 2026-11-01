@@ -163,12 +163,11 @@ func handleDisplayCtrlClient(conn net.Conn) {
 			scopedLogger.Warn().Err(err).Msg("error reading from display sock")
 			break
 		}
-		readMsg := string(readBuf[:n])
 
 		displayResp := CtrlResponse{}
-		err = json.Unmarshal([]byte(readMsg), &displayResp)
+		err = json.Unmarshal(readBuf[:n], &displayResp)
 		if err != nil {
-			scopedLogger.Warn().Err(err).Str("data", readMsg).Msg("error parsing display sock msg")
+			scopedLogger.Warn().Err(err).Str("data", string(readBuf[:n])).Msg("error parsing display sock msg")
 			continue
 		}
 		scopedLogger.Trace().Interface("data", displayResp).Msg("display sock msg")

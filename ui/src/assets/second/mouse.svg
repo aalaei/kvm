@@ -1,0 +1,7 @@
+<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="16.000000" height="16.000000" fill="none">
+	<rect id="鼠标 1" width="16.000002" height="16.000002" x="0.000000" y="0.000000" />
+	<path id="矢量 12" d="M8 5.3335L4 5.3335L4 10.6668C4 12.876 5.79087 14.6668 8 14.6668C10.2091 14.6668 12 12.876 12 10.6668L12 5.3335L8 5.3335Z" fill="currentColor" fill-rule="evenodd" />
+	<path id="矢量 12" d="M4 5.3335L4 10.6668C4 12.876 5.79087 14.6668 8 14.6668C10.2091 14.6668 12 12.876 12 10.6668L12 5.3335L8 5.3335L4 5.3335Z" fill-rule="evenodd" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1" />
+	<path id="矢量 13" d="M8 1.3335L8 5.3335L12 5.3335C12 3.12436 10.2091 1.3335 8 1.3335Z" fill-rule="nonzero" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1" />
+	<path id="矢量 14" d="M4 5.3335L8 5.3335L8 1.3335C5.79087 1.3335 4 3.12436 4 5.3335Z" fill-rule="nonzero" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1" />
+</svg>

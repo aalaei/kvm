@@ -1,7 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { LuVolume2, LuVolumeX } from "react-icons/lu";
 import clsx from "clsx";
+import { Slider } from "antd";
+import { createStyles } from 'antd-style';
+import { isMobile } from "react-device-detect";
+
 import { cva, cx } from "@/cva.config";
+import { button_primary_color, dark_bd_style } from "@/layout/theme_color";
 
 interface VolumeControlProps {
   theme?: "primary" | "danger" | "light" | "lightDanger" | "blank";
@@ -67,27 +72,6 @@ const themes = {
   ),
 };
 
-const btnVariants = cva({
-  base: cx(
-    // Base styles
-    "border rounded-sm select-none",
-    // Size classes
-    "justify-center items-center shrink-0",
-    // Transition classes
-    "outline-hidden transition-all duration-200",
-    // Text classes
-    "font-display text-center font-medium leading-tight",
-    // States
-    "group-focus:outline-hidden group-focus:ring-2 group-focus:ring-offset-2 group-focus:ring-blue-700",
-    "group-disabled:opacity-50 group-disabled:pointer-events-none",
-  ),
-
-  variants: {
-    size: sizes,
-    theme: themes,
-  },
-});
-
 const iconVariants = cva({
   variants: {
     size: {
@@ -107,100 +91,149 @@ const iconVariants = cva({
   },
 });
 
-const VolumeControl: React.FC<VolumeControlProps> = ({
-  theme = "light",
-  size = "XS",
-  fullWidth = false,
-  className,
-}) => {
-  const [volume, setVolume] = useState(1);
-  const [muted, setMuted] = useState(true);
-  const [showSlider, setShowSlider] = useState(false);
-  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+const useStyles = createStyles(({ css }) => ({
+  myCustomSlider: css`
+    .ant-slider-handle:hover::after,
+    .ant-slider-handle:hover::before,
+    .ant-slider-handle:active::after,
+    .ant-slider-handle:focus::after,
+    .ant-slider-handle::after {
+      width: 14px;
+      height: 14px;
+      inset-inline-start: 0;
+      inset-block-start: 0;
+      outline: none;
+      box-shadow: none;
+      border-radius: 50%;
+      margin-top: -2px;
+    }
+  `,
+}));
 
+const VolumeControl: React.FC<VolumeControlProps> = ({
+                                                       theme = "light",
+                                                       size = "XS",
+                                                       fullWidth = false,
+                                                       className,
+                                                     }) => {
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  const unlockedRef = useRef(false);
+  const { styles } = useStyles();
   useEffect(() => {
     const audio = document.querySelector("audio#global-audio") as HTMLAudioElement | null;
     setAudioElement(audio);
-    if (audio) {
-      const savedVolume = parseFloat(localStorage.getItem("audioVolume") || "1");
-      const savedMuted = localStorage.getItem("audioMuted") === "true";
-      
-      audio.volume = savedVolume;
-      audio.muted = savedMuted;
-      setVolume(savedVolume);
-      setMuted(savedMuted);
+    if (!audio) return;
 
-      audio
-        .play()
-        .catch(() => {
-          audio.muted = true;
-          setMuted(true);
-        });
+    const rawVolume = parseFloat(localStorage.getItem("audioVolume") || "1");
+    const savedVolume = rawVolume > 0 ? rawVolume : 1;
+    const savedMuted = localStorage.getItem("audioMuted") === "true";
+
+    audio.volume = savedVolume;
+    setVolume(savedVolume);
+    setMuted(savedMuted);
+
+    if (savedMuted) {
+      audio.muted = true;
+      return;
     }
+
+    // Keep audio muted until the first user gesture. If we unmute before
+    // srcObject is attached, the browser blocks unmuted autoplay entirely
+    // (pauses the element). Only play() in a user-gesture context restarts it.
+    // On a KVM the user always clicks or types within seconds of page load.
+    audio.muted = true;
+
+    const unlock = () => {
+      if (unlockedRef.current) return;
+      unlockedRef.current = true;
+      audio.muted = false;
+      audio.volume = savedVolume;
+      audio.play().catch(() => {});
+    };
+
+    // capture:true so we intercept even if child elements call stopPropagation
+    document.addEventListener("click", unlock, { once: true, capture: true });
+    document.addEventListener("keydown", unlock, { once: true, capture: true });
+
+    return () => {
+      document.removeEventListener("click", unlock, { capture: true });
+      document.removeEventListener("keydown", unlock, { capture: true });
+    };
   }, []);
 
-  const handlePlay = () => {
+  const handleToggleMute = () => {
     if (!audioElement) return;
-    audioElement.muted = false;
-    audioElement.volume = volume;
-    audioElement.play().catch((err) => {
-      console.warn("Failed to play:", err);
-    });
-    setMuted(false);
+    const newMuted = !muted;
+    // When unmuting with volume at 0, restore to a usable level
+    const effectiveVolume = newMuted ? volume : (volume > 0 ? volume : 1);
+    audioElement.muted = newMuted;
+    audioElement.volume = effectiveVolume;
+    if (!newMuted) {
+      audioElement.play().catch((err) => console.warn("Failed to play:", err));
+    }
+    setMuted(newMuted);
+    setVolume(effectiveVolume);
+    localStorage.setItem("audioMuted", String(newMuted));
+    localStorage.setItem("audioVolume", String(effectiveVolume));
   };
 
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newVolume = parseFloat(e.target.value);
+  const handleVolumeChange = (newVolume: number) => {
     setVolume(newVolume);
-    setMuted(newVolume === 0);
     if (audioElement) {
       audioElement.volume = newVolume;
-      audioElement.muted = newVolume === 0;
+      // Dragging to 0 mutes; dragging above 0 always unmutes
+      if (newVolume === 0) {
+        audioElement.muted = true;
+        setMuted(true);
+      } else {
+        audioElement.muted = false;
+        setMuted(false);
+      }
     }
     localStorage.setItem("audioVolume", String(newVolume));
     localStorage.setItem("audioMuted", String(newVolume === 0));
   };
 
   const iconClass = iconVariants({ theme, size });
-  const btnClass = btnVariants({ theme, size });
 
   return (
     <div
       className={clsx(
-        "relative group flex items-center gap-2",
+        "relative group flex items-center",
         fullWidth ? "w-full" : "w-fit",
         className
       )}
-      onMouseEnter={() => setShowSlider(true)}
-      onMouseLeave={() => setShowSlider(false)}
     >
-      <button
-        onClick={handlePlay}
-        className={clsx("group p-2 flex items-center", btnClass)}
-        aria-label="Unmute & Play"
+      <div
+        onClick={handleToggleMute}
       >
         {muted || volume === 0 ? (
           <LuVolumeX className={clsx(iconClass, "shrink-0")} />
         ) : (
           <LuVolume2 className={clsx(iconClass, "shrink-0")} />
         )}
-      </button>
+      </div>
 
       <div
         className={clsx(
-          "transition-all duration-300 ease-in-out",
-          showSlider ? "w-16 opacity-100 ml-2" : "w-0 opacity-0"
+          "transition-all duration-300 ease-in-out ",
+          "flex-1 opacity-100 ml-2 px-2"
         )}
       >
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={muted ? 0 : volume}
+        <Slider
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
           onChange={handleVolumeChange}
-          className="w-16 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-          aria-label="Volume slider"
+          className={`${styles.myCustomSlider} h-full !m-0 ${isMobile ? "w-full" : "w-[100px]"}`}
+          classNames={{
+            rail: `${dark_bd_style} !rounded-md`,
+            track:`${button_primary_color} !rounded-md`,
+            handle: `${button_primary_color} rounded-full`,
+          }}
         />
       </div>
     </div>

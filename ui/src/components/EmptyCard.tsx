@@ -1,6 +1,6 @@
 import React from "react";
 
-import { GridCard } from "@/components/Card";
+import { GridCard } from "@components/Card";
 
 import { cx } from "../cva.config";
 
@@ -10,6 +10,7 @@ interface Props {
   description?: string | React.ReactNode;
   BtnElm?: React.ReactNode;
   className?: string;
+  iconClassName?: string;
 }
 
 export default function EmptyCard({
@@ -18,6 +19,7 @@ export default function EmptyCard({
   description,
   BtnElm,
   className,
+  iconClassName,
 }: Props) {
   return (
     <GridCard>
@@ -30,13 +32,13 @@ export default function EmptyCard({
         <div className="max-w-[90%] space-y-1.5 text-center md:max-w-[60%]">
           <div className="space-y-2">
             {IconElm && (
-              <IconElm className="mx-auto h-5 w-5 text-blue-600 dark:text-blue-600" />
+              <IconElm className={cx("mx-auto h-5 w-5 text-blue-600 dark:text-blue-600", iconClassName)} />
             )}
             <h4 className="text-base font-bold leading-none text-black dark:text-white">
               {headline}
             </h4>
           </div>
-          <p className="mx-auto text-sm text-slate-600 dark:text-slate-400">
+          <p className="mx-auto text-sm text-slate-600 dark:text-[#ffffff]">
             {description}
           </p>
         </div>

@@ -1,6 +1,8 @@
-import { KeyCombo } from "../keyboardLayouts"
+import { KeyboardLayout, KeyCombo } from "../keyboardLayouts"
+import { modifierDisplayMap, keyDisplayMap, virtualKeyboard } from "./en_US"
 
-export const name = "Čeština";
+const name = "Čeština";
+const isoCode = "cs-CZ";
 
 const keyTrema = { key: "Backslash" } // tréma (umlaut), two dots placed above a vowel
 const keyAcute = { key: "Equal" } // accent aigu (acute accent), mark ´ placed above the letter
@@ -97,11 +99,11 @@ export const chars = {
   "Ẇ": { key: "KeyW", shift: true, accentKey: keyOverdot },
   X: { key: "KeyX", shift: true },
   "Ẋ": { key: "KeyX", shift: true, accentKey: keyOverdot },
-  Y: { key: "KeyY", shift: true },
-  "Ý": { key: "KeyY", shift: true, accentKey: keyAcute },
-  "Ẏ": { key: "KeyY", shift: true, accentKey: keyOverdot },
-  Z: { key: "KeyZ", shift: true },
-  "Ż": { key: "KeyZ", shift: true, accentKey: keyOverdot },
+  Y: { key: "KeyZ", shift: true },
+  "Ý": { key: "KeyZ", shift: true, accentKey: keyAcute },
+  "Ẏ": { key: "KeyZ", shift: true, accentKey: keyOverdot },
+  Z: { key: "KeyY", shift: true },
+  "Ż": { key: "KeyY", shift: true, accentKey: keyOverdot },
   a: { key: "KeyA" },
   "ä": { key: "KeyA", accentKey: keyTrema },
   "â": { key: "KeyA", accentKey: keyHat },
@@ -189,10 +191,10 @@ export const chars = {
   x: { key: "KeyX" },
   "#": { key: "KeyX", altRight: true },
   "ẋ": { key: "KeyX", accentKey: keyOverdot },
-  y: { key: "KeyY" },
-  "ẏ": { key: "KeyY", accentKey: keyOverdot },
-  z: { key: "KeyZ" },
-  "ż": { key: "KeyZ", accentKey: keyOverdot },
+  y: { key: "KeyZ" },
+  "ẏ": { key: "KeyZ", accentKey: keyOverdot },
+  z: { key: "KeyY" },
+  "ż": { key: "KeyY", accentKey: keyOverdot },
   ";": { key: "Backquote" },
   "°": { key: "Backquote", shift: true, deadKey: true }, 
   "+": { key: "Digit1" },
@@ -242,3 +244,20 @@ export const chars = {
   Enter: { key: "Enter" },
   Tab: { key: "Tab" },
 } as Record<string, KeyCombo>;
+
+const cs_CZ_keyDisplayMap = {
+  ...keyDisplayMap,
+  KeyY: "z",
+  KeyZ: "y",
+  "(KeyY)": "Z",
+  "(KeyZ)": "Y",
+} as Record<string, string>;
+
+export const cs_CZ: KeyboardLayout = {
+  isoCode,
+  name,
+  chars,
+  keyDisplayMap: cs_CZ_keyDisplayMap,
+  modifierDisplayMap,
+  virtualKeyboard,
+};

@@ -1,25 +1,38 @@
-import React from "react";
-import { useCallback } from "react";
+import React, { useCallback } from "react";
 import { ExclamationTriangleIcon } from "@heroicons/react/24/solid";
-import { ArrowPathIcon, ArrowRightIcon } from "@heroicons/react/16/solid";
 import { motion, AnimatePresence } from "framer-motion";
-import { LuPlay, LuView } from "react-icons/lu";
+import { LuPlay } from "react-icons/lu";
 import { BsMouseFill } from "react-icons/bs";
+import { Button as AntdButton, Card as AntdCard } from "antd";
+import { useReactAt } from "i18n-auto-extractor/react";
+import SuaXinSvg from "@assets/second/shuaxin.svg?react";
+import TiaoZhuanSvg from "@assets/second/tiaozhuan.svg?react";
+import HdmiCordSvg from "@assets/second/hdmi-cord.svg?react";
+import XinHaoSvg from "@assets/second/xinhao.svg?react";
+import { isMobile } from "react-device-detect";
 
-import { Button, LinkButton } from "@components/Button";
-import LoadingSpinner from "@components/LoadingSpinner";
-import Card, { GridCard } from "@components/Card";
-import { useJsonRpc } from "@/hooks/useJsonRpc";
 import notifications from "@/notifications";
-import {useReactAt} from 'i18n-auto-extractor/react'
+import { useJsonRpc } from "@/hooks/useJsonRpc";
+import Card, { GridCard } from "@components/Card";
+import LoadingSpinner from "@components/LoadingSpinner";
+import { Button } from "@components/Button";
+import {
+  dark_bd_style,
+  dark_bg2_style, dark_bg_style,
+  dark_font_style,
+  text_primary_color,
+} from "@/layout/theme_color";
 
 interface OverlayContentProps {
   readonly children: React.ReactNode;
 }
+
 function OverlayContent({ children }: OverlayContentProps) {
   return (
     <GridCard cardClassName="h-full pointer-events-auto outline-hidden!">
-      <div className="flex h-full w-full flex-col items-center justify-center rounded-md border border-slate-800/30 dark:border-slate-300/20">
+      <div
+        className={`flex h-full w-full bg-[rgba(248,248,248,1)] dark:bg-black flex-col items-center justify-center 
+        ${isMobile?"":"rounded-md border border-slate-800/30 dark:border-slate-300/20"}`}>
         {children}
       </div>
     </GridCard>
@@ -36,7 +49,7 @@ export function LoadingVideoOverlay({ show }: LoadingOverlayProps) {
     <AnimatePresence>
       {show && (
         <motion.div
-          className="aspect-video h-full w-full"
+          className="h-full w-full"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -48,7 +61,7 @@ export function LoadingVideoOverlay({ show }: LoadingOverlayProps) {
           <OverlayContent>
             <div className="flex flex-col items-center justify-center gap-y-1">
               <div className="animate flex h-12 w-12 items-center justify-center">
-                <LoadingSpinner className="h-8 w-8 text-blue-800 dark:text-blue-200" />
+                <LoadingSpinner className="h-8 w-8 text-[rgba(22,152,217,1)] dark:text-[rgba(45,106,229,1)]" />
               </div>
               <p className="text-center text-sm text-slate-700 dark:text-slate-300">
                 {$at("Loading video stream...")}
@@ -65,12 +78,13 @@ interface LoadingConnectionOverlayProps {
   readonly show: boolean;
   readonly text: string;
 }
+
 export function LoadingConnectionOverlay({ show, text }: LoadingConnectionOverlayProps) {
   return (
     <AnimatePresence>
       {show && (
         <motion.div
-          className="aspect-video h-full w-full"
+          className="absolute inset-0 h-full w-full"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0 } }}
@@ -82,7 +96,7 @@ export function LoadingConnectionOverlay({ show, text }: LoadingConnectionOverla
           <OverlayContent>
             <div className="flex flex-col items-center justify-center gap-y-1">
               <div className="animate flex h-12 w-12 items-center justify-center">
-                <LoadingSpinner className="h-8 w-8 text-blue-800 dark:text-blue-200" />
+                <LoadingSpinner className="h-8 w-8 text-[rgba(22,152,217,1)] dark:text-[rgba(45,106,229,1)]" />
               </div>
               <p className="text-center text-sm text-slate-700 dark:text-slate-300">
                 {text}
@@ -101,15 +115,16 @@ interface ConnectionErrorOverlayProps {
 }
 
 export function ConnectionFailedOverlay({
-  show,
-  setupPeerConnection,
-}: ConnectionErrorOverlayProps) {
+                                          show,
+                                          setupPeerConnection,
+                                        }: ConnectionErrorOverlayProps)
+{
   const { $at } = useReactAt();
   return (
     <AnimatePresence>
       {show && (
         <motion.div
-          className="aspect-video h-full w-full"
+          className="absolute inset-0 h-full w-full"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0 } }}
@@ -119,34 +134,63 @@ export function ConnectionFailedOverlay({
           }}
         >
           <OverlayContent>
-            <div className="flex flex-col items-start gap-y-1">
-              <ExclamationTriangleIcon className="h-12 w-12 text-yellow-500" />
+            <div className={`${isMobile ? " h-full w-full justify-center p-[24px]" : "w-[38%] p-[48px]"}
+               flex flex-col items-center  gap-y-1 ${dark_bg2_style} border ${dark_bd_style}`}>
+              <XinHaoSvg className={`h-12 w-12 ${text_primary_color}`} />
+              <h2 className={`text-xl font-bold ${dark_font_style}`}>{$at("Connection Error")}</h2>
+
               <div className="text-left text-sm text-slate-700 dark:text-slate-300">
                 <div className="space-y-4">
+
                   <div className="space-y-2 text-black dark:text-white">
-                    <h2 className="text-xl font-bold">{$at("Connection Issue Detected")}</h2>
-                    <ul className="list-disc space-y-2 pl-4 text-left">
-                      <li>{$at("Verify that the device is powered on and properly connected")}</li>
-                      <li>{$at("Check all cable connections for any loose or damaged wires")}</li>
-                      <li>{$at("Ensure your network connection is stable and active")}</li>
-                      <li>{$at("Try restarting both the device and your computer")}</li>
-                    </ul>
+                    <AntdCard className={`${dark_bg_style} ${dark_bd_style}`}>
+                      <ul className="list-disc space-y-2 pl-4 text-left">
+
+                        <li>
+                          {$at("Make sure the ")}
+                          <span className="text-[red]">{$at("PicoKVM ")}</span>
+                          {$at("is powered on and properly connected")}
+
+                        </li>
+
+                        <li>{$at("Check all cables and connectors for any loose or damaged parts")}</li>
+
+                        <li>
+                          {$at("Verify that ")}
+                          <span className="text-[red]">{$at("PicoKVM's ")}</span>
+                          {$at("network connection is active and stable")}
+                        </li>
+                        <li>
+                          {$at("Try restarting both the ")}
+                          <span className="text-[red]">{$at("PicoKVM ")}</span>
+                          {$at("and your computer")}
+                        </li>
+                      </ul>
+                    </AntdCard>
                   </div>
-                  <div className="flex items-center gap-x-2">
-                    <LinkButton
-                      to={"https://wiki.luckfox.com/intro"}
-                      theme="primary"
-                      text={$at("Troubleshooting Guide")}
-                      TrailingIcon={ArrowRightIcon}
-                      size="SM"
-                    />
-                    <Button
+                  <div className={`flex  w-full justify-between ${isMobile ? "flex-col h-[100px]" : "flex-row"}`}>
+                    <AntdButton
+                      type="primary"
+                      // icon={<ArrowPathIcon />}
+                      icon={<SuaXinSvg />}
+                      iconPosition={"end"}
                       onClick={() => setupPeerConnection()}
-                      LeadingIcon={ArrowPathIcon}
-                      text={$at("Try again")}
-                      size="SM"
-                      theme="light"
-                    />
+                      className={isMobile ? "w-full !h-[40px]" : "w-[49%]"}
+                    >
+                      {$at("Try again")}
+                    </AntdButton>
+
+                    {isMobile && <div className="w-full h-[10px]"></div>}
+                    <AntdButton
+                      href={"https://wiki.luckfox.com/intro"}
+                      icon={<TiaoZhuanSvg />}
+                      iconPosition={"end"}
+                      onClick={() => setupPeerConnection()}
+                      className={isMobile ? "w-full !h-[40px]" : "w-[49%]"}
+                    >
+                      {$at("Troubleshooting Guide")}
+                    </AntdButton>
+
                   </div>
                 </div>
               </div>
@@ -163,14 +207,15 @@ interface PeerConnectionDisconnectedOverlay {
 }
 
 export function PeerConnectionDisconnectedOverlay({
-  show,
-}: PeerConnectionDisconnectedOverlay) {
+                                                    show,
+                                                  }: PeerConnectionDisconnectedOverlay)
+{
   const { $at } = useReactAt();
   return (
     <AnimatePresence>
       {show && (
         <motion.div
-          className="aspect-video h-full w-full"
+          className="absolute inset-0 h-full w-full"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0 } }}
@@ -180,23 +225,26 @@ export function PeerConnectionDisconnectedOverlay({
           }}
         >
           <OverlayContent>
-            <div className="flex flex-col items-start gap-y-1">
+            <div className={`${isMobile ? " h-full w-full justify-center p-[24px]" : "w-[38%] p-[48px]"}
+               flex flex-col items-center  gap-y-1 ${dark_bg2_style} border ${dark_bd_style}`}>
               <ExclamationTriangleIcon className="h-12 w-12 text-yellow-500" />
+              <h2 className={`text-xl font-bold ${dark_font_style}`}>{$at("Connection Issue Detected")}</h2>
               <div className="text-left text-sm text-slate-700 dark:text-slate-300">
                 <div className="space-y-4">
                   <div className="space-y-2 text-black dark:text-white">
-                    <h2 className="text-xl font-bold">{$at("Connection Issue Detected")}</h2>
-                    <ul className="list-disc space-y-2 pl-4 text-left">
-                      <li>{$at("Verify that the device is powered on and properly connected")}</li>
-                      <li>{$at("Check all cable connections for any loose or damaged wires")}</li>
-                      <li>{$at("Ensure your network connection is stable and active")}</li>
-                      <li>{$at("Try restarting both the device and your computer")}</li>
-                    </ul>
+                    <AntdCard className={`${dark_bg_style} ${dark_bd_style}`}>
+                      <ul className="list-disc space-y-2 pl-4 text-left">
+                        <li>{$at("Verify that the device is powered on and properly connected")}</li>
+                        <li>{$at("Check all cable connections for any loose or damaged wires")}</li>
+                        <li>{$at("Ensure your network connection is stable and active")}</li>
+                        <li>{$at("Try restarting both the device and your computer")}</li>
+                      </ul>
+                    </AntdCard>
                   </div>
                   <div className="flex items-center gap-x-2">
                     <Card>
                       <div className="flex items-center gap-x-2 p-4">
-                        <LoadingSpinner className="h-4 w-4 text-blue-800 dark:text-blue-200" />
+                        <LoadingSpinner className="h-4 w-4 text-[rgba(22,152,217,1)] dark:text-[rgba(45,106,229,1)]" />
                         <p className="text-sm text-slate-700 dark:text-slate-300">
                           {$at("Retrying connection...")}
                         </p>
@@ -218,11 +266,26 @@ interface HDMIErrorOverlayProps {
   readonly hdmiState: string;
 }
 
+import {
+  useHidStore,
+} from "@/hooks/stores";
+
 export function HDMIErrorOverlay({ show, hdmiState }: HDMIErrorOverlayProps) {
   const isNoSignal = hdmiState === "no_signal";
   const isOtherError = hdmiState === "no_lock" || hdmiState === "out_of_range";
-  const { $at }= useReactAt();
+  const { $at } = useReactAt();
   const [send] = useJsonRpc();
+
+  const setVirtualKeyboardEnabled = useHidStore(state => state.setVirtualKeyboardEnabled);
+  const isVirtualKeyboardEnabled = useHidStore(state => state.isVirtualKeyboardEnabled);
+  const allowTapToOpenVirtualKeyboard = useHidStore(state => state.allowTapToOpenVirtualKeyboard);
+
+  const handleClick = () => {
+    if (isMobile && allowTapToOpenVirtualKeyboard && !isVirtualKeyboardEnabled) {
+      setVirtualKeyboardEnabled(true);
+    }
+  };
+
   const onSendUsbWakeupSignal = useCallback(() => {
     send("sendUsbWakeupSignal", {}, resp => {
       if ("error" in resp) {
@@ -239,7 +302,7 @@ export function HDMIErrorOverlay({ show, hdmiState }: HDMIErrorOverlayProps) {
       <AnimatePresence>
         {show && isNoSignal && (
           <motion.div
-            className="absolute inset-0 aspect-video h-full w-full"
+            className="absolute inset-0 h-full w-full "
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -248,46 +311,69 @@ export function HDMIErrorOverlay({ show, hdmiState }: HDMIErrorOverlayProps) {
               ease: "easeInOut",
             }}
           >
+
             <OverlayContent>
-              <div className="flex flex-col items-start gap-y-1">
-                <ExclamationTriangleIcon className="h-12 w-12 text-yellow-500" />
+              <div className={`${isMobile?" h-full w-full justify-center p-[24px]":"w-[45%] p-[48px]"}
+               flex flex-col items-center  gap-y-1 ${dark_bg2_style} border ${dark_bd_style}`}>
+                <HdmiCordSvg className={`h-12 w-12 ${text_primary_color}`} />
+                <h2 className={`text-xl font-bold ${dark_font_style}`}>{$at("HDMI signal not detected")}</h2>
                 <div className="text-left text-sm text-slate-700 dark:text-slate-300">
                   <div className="space-y-4">
                     <div className="space-y-2 text-black dark:text-white">
-                      <h2 className="text-xl font-bold">{$at("No HDMI signal detected.")}</h2>
-                      <ul className="list-disc space-y-2 pl-4 text-left">
-                        <li>{$at("Ensure the HDMI cable securely connected at both ends")}</li>
-                        <li>
-                          {$at("Ensure source device is powered on and outputting a signal")}
-                        </li>
-                        <li>
-                          {$at("If using an adapter, ensure it's compatible and functioning correctly")}
-                        </li>
-                        <li>
-                          {$at("Certain motherboards do not support simultaneous multi-display output")}
-                        </li> 
-                        <li>
-                          {$at("Ensure source device is not in sleep mode and outputting a signal")}
-                        </li>
-                      </ul>
+
+
+                      <AntdCard
+                          onClick={handleClick}
+                          onTouchEnd={handleClick}
+                          className={`${dark_bg_style} ${dark_bd_style}`}
+                      >
+                        <ul className="list-disc space-y-2 pl-4 text-left">
+                          <li>
+                            {$at("Make sure the HDMI cable is securely connected between the ")}
+                            <span className="text-[red]">{$at("PicoKVM ")}</span>
+                            {$at("and ")}
+                            <span className="text-[red]">{$at("source device")}</span>
+                          </li>
+                          <li>
+                            {$at("If using an adapter, ensure it's compatible and functioning correctly")}
+                          </li>
+                          <li>
+                            {$at("Confirm the  ")}
+                            <span className="text-[red]">{$at("source device ")}</span>
+                            {$at("is powered on and sending video output")}
+                          </li>
+                          <li>
+                            {$at("Confirm the  ")}
+                            <span className="text-[red]">{$at("source device ")}</span>
+                            {$at("is awake and sending video output")}
+                          </li>
+                          <li>
+                            {$at("Certain motherboards do not support simultaneous multi-display output")}
+                          </li> 
+                        </ul>
+                      </AntdCard>
                     </div>
-                    <div>
-                      <Button
-                        theme="light"
-                        text={$at("Try Wakeup")}
-                        TrailingIcon={LuView}
-                        size="SM"
+                    <div className={`flex  w-full justify-between ${isMobile ? "flex-col h-[100px]" : "flex-row"}`}>
+
+                      <AntdButton
+                        type="primary"
+                        icon={<SuaXinSvg />}
+                        iconPosition={"end"}
                         onClick={onSendUsbWakeupSignal}
-                      />
-                    </div>
-                    <div>
-                      <LinkButton
-                        to={"https://wiki.luckfox.com/intro"}
-                        theme="light"
-                        text={$at("Learn more")}
-                        TrailingIcon={ArrowRightIcon}
-                        size="SM"
-                      />
+                        className={isMobile?"w-full !h-[40px]":"w-[49%]"}
+                      >
+                        {$at("Try Wakeup")}
+                      </AntdButton>
+                      {isMobile&&<div className="w-full h-[10px]"></div>}
+
+                      <AntdButton
+                        href={"https://wiki.luckfox.com/intro"}
+                        iconPosition={"end"}
+                        icon={<TiaoZhuanSvg />}
+                        className={isMobile?"w-full !h-[40px]":"w-[49%]"}
+                      >
+                        {$at("Learn more")}
+                      </AntdButton>
                     </div>
                   </div>
                 </div>
@@ -300,7 +386,7 @@ export function HDMIErrorOverlay({ show, hdmiState }: HDMIErrorOverlayProps) {
       <AnimatePresence>
         {show && isOtherError && (
           <motion.div
-            className="absolute inset-0 aspect-video h-full w-full"
+            className="absolute inset-0 h-full w-full"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -310,26 +396,30 @@ export function HDMIErrorOverlay({ show, hdmiState }: HDMIErrorOverlayProps) {
             }}
           >
             <OverlayContent>
-              <div className="flex flex-col items-start gap-y-1">
+              <div className={`${isMobile ? " h-full w-full justify-center p-[24px]" : "w-[38%] p-[48px]"}
+                 flex flex-col items-center  gap-y-1 ${dark_bg2_style} border ${dark_bd_style}`}>
                 <ExclamationTriangleIcon className="h-12 w-12 text-yellow-500" />
+                <h2 className={`text-xl font-bold ${dark_font_style}`}>HDMI signal error detected.</h2>
                 <div className="text-left text-sm text-slate-700 dark:text-slate-300">
                   <div className="space-y-4">
                     <div className="space-y-2 text-black dark:text-white">
-                      <h2 className="text-xl font-bold">HDMI signal error detected.</h2>
-                      <ul className="list-disc space-y-2 pl-4 text-left">
-                        <li>{$at("A loose or faulty HDMI connection")}</li>
-                        <li>{$at("Incompatible resolution or refresh rate settings")}</li>
-                        <li>{$at("Issues with the source device's HDMI output")}</li>
-                      </ul>
+                      <AntdCard className={`${dark_bg_style} ${dark_bd_style}`}>
+                        <ul className="list-disc space-y-2 pl-4 text-left">
+                          <li>{$at("A loose or faulty HDMI connection")}</li>
+                          <li>{$at("Incompatible resolution or refresh rate settings")}</li>
+                          <li>{$at("Issues with the source device's HDMI output")}</li>
+                        </ul>
+                      </AntdCard>
                     </div>
-                    <div>
-                      <LinkButton
-                        to={"https://wiki.luckfox.com/intro"}
-                        theme="light"
-                        text="Learn more"
-                        TrailingIcon={ArrowRightIcon}
-                        size="SM"
-                      />
+                    <div className={`flex  w-full justify-center ${isMobile ? "flex-col h-[40px]" : "flex-row"}`}>
+                      <AntdButton
+                        href={"https://wiki.luckfox.com/intro"}
+                        icon={<TiaoZhuanSvg />}
+                        iconPosition={"end"}
+                        className={isMobile ? "w-full !h-[40px]" : "w-[49%]"}
+                      >
+                        {$at("Learn more")}
+                      </AntdButton>
                     </div>
                   </div>
                 </div>
@@ -348,15 +438,15 @@ interface NoAutoplayPermissionsOverlayProps {
 }
 
 export function NoAutoplayPermissionsOverlay({
-  show,
-  onPlayClick,
-}: NoAutoplayPermissionsOverlayProps) {
-  const { $at }= useReactAt();
+                                               show,
+                                               onPlayClick,
+                                             }: NoAutoplayPermissionsOverlayProps) {
+  const { $at } = useReactAt();
   return (
     <AnimatePresence>
       {show && (
         <motion.div
-          className="absolute inset-0 z-10 aspect-video h-full w-full"
+          className="absolute inset-0 z-10 h-full w-full"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -382,7 +472,7 @@ export function NoAutoplayPermissionsOverlay({
                   />
                 </div>
 
-                <div className="text-xs text-slate-600 dark:text-slate-400">
+                <div className="text-xs text-slate-600 dark:text-[#ffffff]">
                   {$at("Please adjust browser settings to enable autoplay")}
                 </div>
               </div>
@@ -399,7 +489,7 @@ interface PointerLockBarProps {
 }
 
 export function PointerLockBar({ show }: PointerLockBarProps) {
-  const { $at }= useReactAt();
+  const { $at } = useReactAt();
   return (
     <AnimatePresence mode="wait">
       {show ? (
@@ -412,7 +502,8 @@ export function PointerLockBar({ show }: PointerLockBarProps) {
         >
           <div>
             <Card className="rounded-b-none shadow-none outline-0!">
-              <div className="flex items-center justify-between border border-slate-800/50 px-4 py-2 outline-0 backdrop-blur-xs dark:border-slate-300/20 dark:bg-slate-800">
+              <div
+                className="flex items-center justify-between border border-slate-800/50 px-4 py-2 outline-0 backdrop-blur-xs dark:border-slate-300/20 dark:bg-slate-800">
                 <div className="flex items-center space-x-2">
                   <BsMouseFill className="h-4 w-4 text-blue-700 dark:text-blue-500" />
                   <span className="text-sm text-black dark:text-white">

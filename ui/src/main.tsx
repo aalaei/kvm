@@ -11,44 +11,18 @@ import { ExclamationTriangleIcon } from "@heroicons/react/16/solid";
 
 import EmptyCard from "@components/EmptyCard";
 import NotFoundPage from "@components/NotFoundPage";
-import DevicesIdDeregister from "@routes/devices.$id.deregister";
-import DeviceIdRename from "@routes/devices.$id.rename";
-import AdoptRoute from "@routes/adopt";
-import SignupRoute from "@routes/signup";
-import LoginRoute from "@routes/login";
-import SetupRoute from "@routes/devices.$id.setup";
-import DevicesRoute from "@routes/devices";
-import DeviceRoute, { LocalDevice } from "@routes/devices.$id";
+import { LocalDevice } from "@/layout/index.pc";
 import Card from "@components/Card";
-import DevicesAlreadyAdopted from "@routes/devices.already-adopted";
+import LocalAuthPage, { DeviceStatus } from "@routes/login_page/index";
+import { ThemeProvider } from "@/layout/contexts/ThemeContext";
+import PassWordPage from "@routes/password";
+import Home from "@/layout";
+import OtherSessionRoute from "@/layout/core/other-session";
+import LoginLocalRoute from "@routes/login-local";
 
-import Root from "./root";
-import Notifications from "./notifications";
-import LoginLocalRoute from "./routes/login-local";
-import WelcomeLocalModeRoute from "./routes/welcome-local.mode";
-import WelcomeRoute, { DeviceStatus } from "./routes/welcome-local";
-import WelcomeLocalPasswordRoute from "./routes/welcome-local.password";
-import { DEVICE_API } from "./ui.config";
-import OtherSessionRoute from "./routes/devices.$id.other-session";
-import MountRoute from "./routes/devices.$id.mount";
-import MtpRoute from "./routes/devices.$id.mtp";
-import * as SettingsRoute from "./routes/devices.$id.settings";
-import SettingsMouseRoute from "./routes/devices.$id.settings.mouse";
-import SettingsKeyboardRoute from "./routes/devices.$id.settings.keyboard";
 import api from "./api";
-import * as SettingsIndexRoute from "./routes/devices.$id.settings._index";
-import SettingsAdvancedRoute from "./routes/devices.$id.settings.advanced";
-import SettingsAccessIndexRoute from "./routes/devices.$id.settings.access._index";
-import SettingsHardwareRoute from "./routes/devices.$id.settings.hardware";
-import SettingsVideoRoute from "./routes/devices.$id.settings.video";
-import SettingsAppearanceRoute from "./routes/devices.$id.settings.appearance";
-import * as SettingsGeneralIndexRoute from "./routes/devices.$id.settings.general._index";
-import SettingsGeneralUpdateRoute from "./routes/devices.$id.settings.general.update";
-import SettingsNetworkRoute from "./routes/devices.$id.settings.network";
-import SecurityAccessLocalAuthRoute from "./routes/devices.$id.settings.access.local-auth";
-import SettingsMacrosRoute from "./routes/devices.$id.settings.macros";
-import SettingsMacrosAddRoute from "./routes/devices.$id.settings.macros.add";
-import SettingsMacrosEditRoute from "./routes/devices.$id.settings.macros.edit";
+import { DEVICE_API } from "./ui.config";
+import Notifications from "./notifications";
 
 export const isOnDevice = true;
 export const isInCloud = !isOnDevice;
@@ -74,22 +48,7 @@ export async function checkAuth() {
   return checkDeviceAuth();
 }
 
-  let router = createBrowserRouter([
-    {
-      path: "/mode",
-      element: <WelcomeLocalModeRoute />,
-      action: WelcomeLocalModeRoute.action,
-    },
-    {
-      path: "/mode/password",
-      element: <WelcomeLocalPasswordRoute />,
-      action: WelcomeLocalPasswordRoute.action,
-    },
-    //{
-    //  path: "/welcome",
-    //  element: <WelcomeRoute />,
-    //  loader: WelcomeRoute.loader,
-    //},
+  const router = createBrowserRouter([
     {
       path: "/login-local",
       element: <LoginLocalRoute />,
@@ -97,131 +56,49 @@ export async function checkAuth() {
       loader: LoginLocalRoute.loader,
     },
     {
+      path: "/mode",
+      element: <LocalAuthPage />,
+      action: LocalAuthPage.action,
+    },
+    {
+      path: "/mode/password",
+      element: <PassWordPage />,
+      action: PassWordPage.action,
+    },
+    {
       path: "/",
       errorElement: <ErrorBoundary />,
-      element: <DeviceRoute />,
-      loader: DeviceRoute.loader,
+      element: <Home />,
+      loader: Home.loader,
       children: [
         {
           path: "other-session",
           element: <OtherSessionRoute />,
         },
-        {
-          path: "mount",
-          element: <MountRoute />,
-        },
-        {
-          path: "mtp",
-          element: <MtpRoute />,
-        },
-        {
-          path: "settings",
-          element: <SettingsRoute.default />,
-          children: [
-            {
-              index: true,
-              loader: SettingsIndexRoute.loader,
-            },
-            {
-              path: "general",
-              children: [
-                {
-                  index: true,
-                  element: <SettingsGeneralIndexRoute.default />,
-                },
-                {
-                  path: "update",
-                  element: <SettingsGeneralUpdateRoute />,
-                },
-              ],
-            },
-            {
-              path: "mouse",
-              element: <SettingsMouseRoute />,
-            },
-            {
-              path: "keyboard",
-              element: <SettingsKeyboardRoute />,
-            },
-            {
-              path: "advanced",
-              element: <SettingsAdvancedRoute />,
-            },
-            {
-              path: "hardware",
-              element: <SettingsHardwareRoute />,
-            },
-            {
-              path: "network",
-              element: <SettingsNetworkRoute />,
-            },
-            {
-              path: "access",
-              children: [
-                {
-                  index: true,
-                  element: <SettingsAccessIndexRoute />,
-                  loader: SettingsAccessIndexRoute.loader,
-                },
-                {
-                  path: "local-auth",
-                  element: <SecurityAccessLocalAuthRoute />,
-                },
-              ],
-            },
-            {
-              path: "video",
-              element: <SettingsVideoRoute />,
-            },
-            {
-              path: "appearance",
-              element: <SettingsAppearanceRoute />,
-            },
-            {
-              path: "macros",
-              children: [
-                {
-                  index: true,
-                  element: <SettingsMacrosRoute />,
-                },
-                {
-                  path: "add",
-                  element: <SettingsMacrosAddRoute />,
-                },
-                {
-                  path: ":macroId/edit",
-                  element: <SettingsMacrosEditRoute />,
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    },
-    {
-      path: "/adopt",
-      element: <AdoptRoute />,
-      loader: AdoptRoute.loader,
-      errorElement: <ErrorBoundary />,
+      ]
     },
   ]);
 
 document.addEventListener("DOMContentLoaded", () => {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <>
-      <RouterProvider router={router} />
-      <Notifications
-        toastOptions={{
-          className:
-            "rounded-sm border-none bg-white text-black shadow-sm outline-1 outline-slate-800/30",
-        }}
-        max={2}
-      />
+
+      <ThemeProvider>
+        <RouterProvider router={router} />
+        <Notifications
+          toastOptions={{
+            className:
+              "rounded-sm border-none bg-white text-black shadow-sm outline-1 outline-slate-800/30",
+          }}
+          max={2}
+        />
+
+
+      </ThemeProvider>
     </>,
   );
 });
 
-// eslint-disable-next-line react-refresh/only-export-components
 function ErrorBoundary() {
   const error = useRouteError();
 
@@ -238,6 +115,7 @@ function ErrorBoundary() {
         <div className="w-full max-w-2xl">
           <EmptyCard
             IconElm={ExclamationTriangleIcon}
+            iconClassName="text-[rgba(22,152,217,1)] dark:text-[rgba(45,106,229,1)]"
             headline="Oh no!"
             description="Something went wrong. Please try again later or contact support"
             BtnElm={

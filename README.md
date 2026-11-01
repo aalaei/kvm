@@ -1,7 +1,7 @@
 ![luckfox](https://github.com/LuckfoxTECH/luckfox-pico/assets/144299491/cec5c4a5-22b9-4a9a-abb1-704b11651e88)
 [中文](./README_CN.md)
 # Luckfox PicoKVM
-Luckfox PicoKVM is a lightweight IP KVM operation and maintenance tool. It allows remote access to a target device’s display and simulates HID input over the network, enabling contactless operation and management of development boards, PCs, and servers. The product delivers stable, low-latency video capture and remote control, making it well-suited for scenarios such as remote computer management and server maintenance. The software is based on a secondary development of JetKVM.
+Luckfox PicoKVM is a lightweight IP KVM operation and maintenance tool. It allows remote access to a target device’s display and simulates HID input over the network, enabling contactless operation and management of development boards, PCs, and servers. The product delivers stable, low-latency video capture and remote control, making it well-suited for scenarios such as remote computer management and server maintenance. The software is based on a secondary development of [JetKVM](https://jetkvm.com/).
 
 ## Features
 * **Micro SD card support**: Used for software boot settings or storage expansion

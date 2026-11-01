@@ -82,6 +82,9 @@ type UsbGadget struct {
 	onKeyboardStateChange *func(state KeyboardState)
 	onHidDeviceMissing    *func(device string, err error)
 
+	keysDownState       KeysDownState
+	autoReleaseTimers   []autoReleaseTimer
+
 	log *zerolog.Logger
 
 	logSuppressionCounter map[string]int

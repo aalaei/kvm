@@ -163,12 +163,11 @@ func handleVpnCtrlClient(conn net.Conn) {
 			scopedLogger.Warn().Err(err).Msg("error reading from vpn sock")
 			break
 		}
-		readMsg := string(readBuf[:n])
 
 		vpnResp := CtrlResponse{}
-		err = json.Unmarshal([]byte(readMsg), &vpnResp)
+		err = json.Unmarshal(readBuf[:n], &vpnResp)
 		if err != nil {
-			scopedLogger.Warn().Err(err).Str("data", readMsg).Msg("error parsing vpn sock msg")
+			scopedLogger.Warn().Err(err).Str("data", string(readBuf[:n])).Msg("error parsing vpn sock msg")
 			continue
 		}
 		scopedLogger.Trace().Interface("data", vpnResp).Msg("vpn sock msg")

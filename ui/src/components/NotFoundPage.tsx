@@ -1,6 +1,6 @@
 import { ExclamationTriangleIcon } from "@heroicons/react/24/outline";
 
-import EmptyCard from "@/components/EmptyCard";
+import EmptyCard from "@components/EmptyCard";
 
 export default function NotFoundPage() {
   return (

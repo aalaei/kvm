@@ -1,0 +1,9 @@
+<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="48.000000" height="48.000000" fill="none">
+	<rect id="信号 3" width="48.000000" height="48.000000" x="0.000000" y="0.000000" />
+	<path id="矢量 101" d="M40 6L40 42" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" />
+	<path id="矢量 102" d="M29 16L29 42" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" />
+	<path id="矢量 103" d="M19 26L19 42" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" />
+	<path id="矢量 104" d="M8 36L8 42" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" />
+	<path id="矢量 105" d="M0.001 0L0 15.5565" stroke="rgb(255,0,0)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" transform="matrix(0.707107,-0.707107,0.707107,0.707107,8,6)" />
+	<path id="矢量 106" d="M0 0L0.001 15.5568" stroke="rgb(255,0,0)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" transform="matrix(0.707107,0.707107,0.707107,-0.707107,7.99963,16.9995)" />
+</svg>

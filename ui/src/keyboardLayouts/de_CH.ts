@@ -1,6 +1,9 @@
-import { KeyCombo } from "../keyboardLayouts"
+import { KeyboardLayout, KeyCombo } from "../keyboardLayouts"
+import { modifierDisplayMap, keyDisplayMap, virtualKeyboard } from "./en_US"
+export { keyDisplayMap } from "./en_US";
 
-export const name = "Schwiizerdütsch";
+const name = "Schwiizerdütsch";
+const isoCode = "de-CH";
 
 const keyTrema = { key: "BracketRight" } // tréma (umlaut), two dots placed above a vowel
 const keyAcute = { key: "Minus", altRight: true } // accent aigu (acute accent), mark ´ placed above the letter
@@ -163,3 +166,20 @@ export const chars = {
   Enter: { key: "Enter" },
   Tab: { key: "Tab" },
 } as Record<string, KeyCombo>;
+
+export const de_CH_keyDisplayMap = {
+  ...keyDisplayMap,
+  KeyY: "z",
+  KeyZ: "y",
+  "(KeyY)": "Z",
+  "(KeyZ)": "Y",
+} as Record<string, string>;
+
+export const de_CH: KeyboardLayout = {
+  isoCode,
+  name,
+  chars,
+  keyDisplayMap: de_CH_keyDisplayMap,
+  modifierDisplayMap,
+  virtualKeyboard,
+};

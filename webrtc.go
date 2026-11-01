@@ -22,7 +22,6 @@ type Session struct {
 	//AudioTrack               *webrtc.TrackLocalStaticSample
 	ControlChannel           *webrtc.DataChannel
 	RPCChannel               *webrtc.DataChannel
-	HidChannel               *webrtc.DataChannel
 	DiskChannel              *webrtc.DataChannel
 	shouldUmountVirtualMedia bool
 }
@@ -32,6 +31,33 @@ type SessionConfig struct {
 	LocalIP    string
 	ws         *websocket.Conn
 	Logger     *zerolog.Logger
+}
+
+const DefaultSTUN = "stun:stun.l.google.com:19302"
+
+func buildICEServers() []webrtc.ICEServer {
+	if config == nil {
+		LoadConfig()
+	}
+
+	stunURL := config.STUN
+	if stunURL == "" {
+		stunURL = DefaultSTUN
+	}
+
+	servers := []webrtc.ICEServer{{URLs: []string{stunURL}}}
+	for _, turnServer := range config.TurnServers {
+		if turnServer.URL == "" {
+			continue
+		}
+		servers = append(servers, webrtc.ICEServer{
+			URLs:       []string{turnServer.URL},
+			Username:   turnServer.Username,
+			Credential: turnServer.Credential,
+		})
+	}
+
+	return servers
 }
 
 func (s *Session) ExchangeOffer(offerStr string) (string, error) {
@@ -86,16 +112,7 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		scopedLogger = webrtcLogger
 	}
 
-	iceServers := []webrtc.ICEServer{
-		{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		},
-	}
-	if config.STUN != "" {
-		iceServers = append(iceServers, webrtc.ICEServer{
-			URLs: []string{config.STUN},
-		})
-	}
+	iceServers := buildICEServers()
 
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(webrtcSettingEngine))
 	peerConnection, err := api.NewPeerConnection(webrtc.Configuration{
@@ -131,7 +148,11 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		}
 	})
 
-	session.VideoTrack, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "kvm")
+	if streamEncodecType == "hevc" {
+		session.VideoTrack, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH265}, "video", "kvm")
+	} else {
+		session.VideoTrack, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "kvm")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +212,7 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 				isConnected = true
 				actionSessions++
 				onActiveSessionsChanged()
+				setNpuAppStatus()
 				if actionSessions == 1 {
 					onFirstSessionConnected()
 				}

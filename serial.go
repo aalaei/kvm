@@ -1,8 +1,12 @@
 package kvm
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 
+	"github.com/coder/websocket"
+	"github.com/gin-gonic/gin"
 	"github.com/pion/webrtc/v4"
 	"go.bug.st/serial"
 )
@@ -94,4 +98,80 @@ func handleSerialChannel(d *webrtc.DataChannel) {
 		}
 		scopedLogger.Info().Msg("Serial channel closed")
 	})
+}
+
+func handleSerialWS(c *gin.Context) {
+	source := c.ClientIP()
+	scopedLogger := serialLogger.With().
+		Str("transport", "websocket").
+		Str("source", source).
+		Logger()
+
+	wsCon, err := websocket.Accept(c.Writer, c.Request, &websocket.AcceptOptions{
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		c.Status(500)
+		return
+	}
+	defer wsCon.Close(websocket.StatusNormalClosure, "")
+
+	if err := reopenSerialPort(); err != nil {
+		scopedLogger.Error().Err(err).Msg("Failed to open serial port")
+		wsCon.Close(websocket.StatusInternalError, "")
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 1024)
+		for {
+			if port == nil {
+				return
+			}
+			n, readErr := port.Read(buf)
+			if readErr != nil {
+				if readErr != io.EOF {
+					scopedLogger.Warn().Err(readErr).Msg("Failed to read from serial port")
+				}
+				return
+			}
+			if writeErr := wsCon.Write(ctx, websocket.MessageBinary, buf[:n]); writeErr != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		msgType, data, readErr := wsCon.Read(ctx)
+		if readErr != nil {
+			break
+		}
+
+		if msgType == websocket.MessageText {
+			maybeJson := bytes.TrimSpace(data)
+			if len(maybeJson) > 1 && maybeJson[0] == '{' && maybeJson[len(maybeJson)-1] == '}' {
+				var size TerminalSize
+				if err := json.Unmarshal(maybeJson, &size); err == nil {
+					continue
+				}
+			}
+		}
+
+		if port == nil {
+			continue
+		}
+		if _, err := port.Write(data); err != nil {
+			break
+		}
+	}
+
+	if port != nil {
+		port.Close()
+		port = nil
+	}
+	<-done
 }

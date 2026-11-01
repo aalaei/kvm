@@ -3,25 +3,24 @@ import { useState } from "react";
 import { LuEye, LuEyeOff } from "react-icons/lu";
 
 import SimpleNavbar from "@components/SimpleNavbar";
-import GridBackground from "@components/GridBackground";
 import Container from "@components/Container";
 import Fieldset from "@components/Fieldset";
 import { InputFieldWithLabel } from "@components/InputField";
 import { Button } from "@components/Button";
 import LogoLuckfox from "@/assets/logo-luckfox.png";
 import { DEVICE_API } from "@/ui.config";
+import { DeviceStatus } from "@routes/login_page/index";
 
 import api from "../api";
 import ExtLink from "../components/ExtLink";
 
-import { DeviceStatus } from "./welcome-local";
 
 const loader = async () => {
   const res = await api
     .GET(`${DEVICE_API}/device/status`)
     .then(res => res.json() as Promise<DeviceStatus>);
 
-  if (!res.isSetup) return redirect("/welcome");
+  if (!res.isSetup) return redirect("/mode");
 
   const deviceRes = await api.GET(`${DEVICE_API}/device`);
   if (deviceRes.ok) return redirect("/");
@@ -40,7 +39,8 @@ const action = async ({ request }: ActionFunctionArgs) => {
     if (response.ok) {
       return redirect("/");
     } else {
-      return { error: "Invalid password" };
+      const data = await response.json();
+      return { error: data.error || "Invalid password" };
     }
   } catch (error) {
     console.error(error);
@@ -54,11 +54,10 @@ export default function LoginLocalRoute() {
 
   return (
     <>
-      <GridBackground />
       <div className="grid min-h-screen grid-rows-(--grid-layout)">
         <SimpleNavbar />
         <Container>
-          <div className="isolate flex h-full w-full items-center justify-center">
+          <div className="flex h-full w-full items-center justify-center">
             <div className="-mt-32 max-w-2xl space-y-8">
               <div className="flex items-center justify-center">
                 <img
@@ -73,7 +72,7 @@ export default function LoginLocalRoute() {
                 <h1 className="text-4xl font-semibold text-black dark:text-white">
                   Welcome back to KVM
                 </h1>
-                <p className="font-medium text-slate-600 dark:text-slate-400">
+                <p className="font-medium text-slate-600 dark:text-[#ffffff]">
                   Enter your password to access your KVM.
                 </p>
               </div>
@@ -94,14 +93,14 @@ export default function LoginLocalRoute() {
                             onClick={() => setShowPassword(false)}
                             className="pointer-events-auto"
                           >
-                            <LuEye className="h-4 w-4 cursor-pointer text-slate-500 dark:text-slate-400" />
+                            <LuEye className="h-4 w-4 cursor-pointer text-slate-500 dark:text-[#ffffff]" />
                           </div>
                         ) : (
                           <div
                             onClick={() => setShowPassword(true)}
                             className="pointer-events-auto"
                           >
-                            <LuEyeOff className="h-4 w-4 cursor-pointer text-slate-500 dark:text-slate-400" />
+                            <LuEyeOff className="h-4 w-4 cursor-pointer text-slate-500 dark:text-[#ffffff]" />
                           </div>
                         )
                       }
@@ -117,7 +116,7 @@ export default function LoginLocalRoute() {
                     textAlign="center"
                   />
 
-                  <div className="mt-4 flex justify-start text-xs text-slate-500 dark:text-slate-400">
+                  <div className="mt-4 flex justify-start text-xs text-slate-500 dark:text-[#ffffff]">
                     <ExtLink
                       href="https://wiki.luckfox.com/intro"
                       className="hover:underline"

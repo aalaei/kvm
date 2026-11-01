@@ -2,6 +2,8 @@ package kvm
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"kvm/internal/network"
 	"kvm/internal/udhcpc"
@@ -17,6 +19,27 @@ var (
 	networkState *network.NetworkInterfaceState
 )
 
+func setProxyEnvVar(key, value string) {
+	value = strings.TrimSpace(value)
+	upperKey := strings.ToUpper(key)
+	if value == "" {
+		_ = os.Unsetenv(key)
+		_ = os.Unsetenv(upperKey)
+		return
+	}
+	_ = os.Setenv(key, value)
+	_ = os.Setenv(upperKey, value)
+}
+
+func applyProxyEnvironment(networkConfig *network.NetworkConfig) {
+	if networkConfig == nil {
+		return
+	}
+	setProxyEnvVar("http_proxy", networkConfig.HTTPProxy.String)
+	setProxyEnvVar("https_proxy", networkConfig.HTTPSProxy.String)
+	setProxyEnvVar("all_proxy", networkConfig.ALLProxy.String)
+}
+
 func networkStateChanged() {
 	// do not block the main thread
 	go waitCtrlAndRequestDisplayUpdate(true)
@@ -26,13 +49,13 @@ func networkStateChanged() {
 		_ = mDNS.SetListenOptions(config.NetworkConfig.GetMDNSMode())
 		_ = mDNS.SetLocalNames([]string{
 			networkState.GetHostname(),
-			networkState.GetFQDN(),
 		}, true)
 	}
 }
 
 func initNetwork() error {
 	ensureConfigLoaded()
+	applyProxyEnvironment(config.NetworkConfig)
 
 	state, err := network.NewNetworkInterfaceState(&network.NetworkInterfaceOptions{
 		DefaultHostname: GetDefaultHostname(),
@@ -131,6 +154,7 @@ func rpcSetNetworkSettings(settings network.RpcNetworkSettings) (*network.RpcNet
 	if err := SaveConfig(); err != nil {
 		return nil, err
 	}
+	applyProxyEnvironment(config.NetworkConfig)
 
 	return &network.RpcNetworkSettings{NetworkConfig: *config.NetworkConfig}, nil
 }
@@ -141,4 +165,17 @@ func rpcRenewDHCPLease() error {
 
 func rpcRequestDHCPAddress(ip string) error {
 	return networkState.RpcRequestDHCPAddress(ip)
+}
+
+const ethernetMacAddressPath = "/userdata/ethaddr.txt"
+
+func rpcSetEthernetMacAddress(macAddress string) (interface{}, error) {
+	normalized, err := networkState.SetMACAddress(macAddress)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(ethernetMacAddressPath, []byte(normalized+"\n"), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write %s: %w", ethernetMacAddressPath, err)
+	}
+	return networkState.RpcGetNetworkState(), nil
 }

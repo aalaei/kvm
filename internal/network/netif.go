@@ -176,6 +176,49 @@ func (s *NetworkInterfaceState) MACString() string {
 	return s.macAddr.String()
 }
 
+func (s *NetworkInterfaceState) SetMACAddress(macAddress string) (string, error) {
+	macAddress = strings.TrimSpace(macAddress)
+	if macAddress == "" {
+		return "", fmt.Errorf("mac address is empty")
+	}
+	hw, err := net.ParseMAC(macAddress)
+	if err != nil {
+		return "", fmt.Errorf("invalid mac address")
+	}
+	if len(hw) != 6 {
+		return "", fmt.Errorf("invalid mac address length")
+	}
+	normalized := strings.ToLower(hw.String())
+
+	s.stateLock.Lock()
+	iface, err := netlink.LinkByName(s.interfaceName)
+	if err != nil {
+		s.stateLock.Unlock()
+		return "", err
+	}
+	if err := netlink.LinkSetDown(iface); err != nil {
+		s.stateLock.Unlock()
+		return "", err
+	}
+	if err := netlink.LinkSetHardwareAddr(iface, hw); err != nil {
+		s.stateLock.Unlock()
+		return "", err
+	}
+	if err := netlink.LinkSetUp(iface); err != nil {
+		s.stateLock.Unlock()
+		return "", err
+	}
+	s.stateLock.Unlock()
+
+	if s.dhcpClient != nil && strings.TrimSpace(s.config.IPv4Mode.String) == "dhcp" {
+		_ = s.dhcpClient.Renew()
+	}
+	if _, err := s.update(); err != nil {
+		return normalized, err
+	}
+	return normalized, nil
+}
+
 func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 	s.stateLock.Lock()
 	defer s.stateLock.Unlock()

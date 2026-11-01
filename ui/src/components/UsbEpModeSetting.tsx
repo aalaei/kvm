@@ -1,16 +1,14 @@
 import { useCallback , useEffect, useState } from "react";
+import {useReactAt} from 'i18n-auto-extractor/react'
+
+import { SettingsItem } from "@components/Settings/SettingsView";
 
 import { useJsonRpc } from "../hooks/useJsonRpc";
 import notifications from "../notifications";
-import { SettingsItem } from "../routes/devices.$id.settings";
-
-import Checkbox from "./Checkbox";
-import { Button } from "./Button";
-import { SelectMenuBasic } from "./SelectMenuBasic";
-import { SettingsSectionHeader } from "./SettingsSectionHeader";
-import Fieldset from "./Fieldset";
 import { useUsbEpModeStore, useAudioModeStore } from "../hooks/stores";
-import {useReactAt} from 'i18n-auto-extractor/react'
+
+import { SelectMenuBasic } from "./SelectMenuBasic";
+import Fieldset from "./Fieldset";
 
 export interface UsbDeviceConfig {
   keyboard: boolean;
@@ -192,7 +190,7 @@ export function UsbEpModeSetting() {
               onChange={e => handleAudioModeChange(e.target.value)}
             />
           </SettingsItem>
-        )} 
+        )}
     </Fieldset>
   );
 }

@@ -4,6 +4,11 @@ import plugin from "tailwindcss/plugin";
 
 /** @type {import("tailwindcss").Config} */
 export default {
+  // theme:{
+  //   screen:{
+  //     'md': '1024px',
+  //   }
+  // },
   darkMode: "selector",
   plugins: [
     require("@tailwindcss/forms"),

@@ -1,0 +1,27 @@
+<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="16.000000" height="16.000000" fill="none">
+	<rect id="键盘 1" width="16.000002" height="16.000002" x="0.000000" y="0.000000" />
+	<rect id="矩形 7" width="13.333334" height="8.000001" x="1.333374" y="6.000000" rx="0.666667" fill="currentColor" />
+	<rect id="矩形 7" width="13.333334" height="8.000001" x="1.333374" y="6.000000" rx="0.666667" stroke="currentColor" stroke-linejoin="round" stroke-width="1" />
+	<circle id="椭圆 11" cx="4.66666698" cy="7.99991894" r="0.666666746" fill="rgb(26,26,26)" />
+	<circle id="椭圆 11" cx="4.66666698" cy="7.99991894" r="0.166666746" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 12" cx="5.33329296" cy="9.99991894" r="0.666666985" fill="rgb(26,26,26)" />
+	<circle id="椭圆 12" cx="5.33329296" cy="9.99991894" r="0.166666985" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 13" cx="3.33329272" cy="9.99991894" r="0.666666746" fill="rgb(26,26,26)" />
+	<circle id="椭圆 13" cx="3.33329272" cy="9.99991894" r="0.166666746" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 14" cx="6.66666651" cy="7.99991894" r="0.666666508" fill="rgb(26,26,26)" />
+	<circle id="椭圆 14" cx="6.66666651" cy="7.99991894" r="0.166666508" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 15" cx="7.33329296" cy="9.99991894" r="0.666666746" fill="rgb(26,26,26)" />
+	<circle id="椭圆 15" cx="7.33329296" cy="9.99991894" r="0.166666746" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 16" cx="8.66666603" cy="7.99991894" r="0.666666508" fill="rgb(26,26,26)" />
+	<circle id="椭圆 16" cx="8.66666603" cy="7.99991894" r="0.166666508" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 17" cx="9.33329201" cy="9.99991894" r="0.666666508" fill="rgb(26,26,26)" />
+	<circle id="椭圆 17" cx="9.33329201" cy="9.99991894" r="0.166666508" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 18" cx="10.666667" cy="7.99991894" r="0.666666985" fill="rgb(26,26,26)" />
+	<circle id="椭圆 18" cx="10.666667" cy="7.99991894" r="0.166666985" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 19" cx="11.333293" cy="9.99991894" r="0.666666985" fill="rgb(26,26,26)" />
+	<circle id="椭圆 19" cx="11.333293" cy="9.99991894" r="0.166666985" stroke="rgb(26,26,26)" stroke-width="1" />
+	<circle id="椭圆 20" cx="12.666666" cy="7.99991894" r="0.666666508" fill="rgb(26,26,26)" />
+	<circle id="椭圆 20" cx="12.666666" cy="7.99991894" r="0.166666508" stroke="rgb(26,26,26)" stroke-width="1" />
+	<path id="矢量 95" d="M5.66663 12L10.3333 12" stroke="rgb(26,26,26)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1" />
+	<path id="矢量 96" d="M8 6L8 4.375C8 4.1909 8.14923 4.04167 8.33333 4.04167L10 4.04167C10.1841 4.04167 10.3333 3.89243 10.3333 3.70833L10.3333 2" fill-rule="nonzero" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1" />
+</svg>
