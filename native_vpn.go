@@ -24,16 +24,16 @@ var vpnLock = &sync.Mutex{}
 
 func CallVpnCtrlAction(action string, params map[string]interface{}) (*CtrlResponse, error) {
 	vpnLock.Lock()
-	defer vpnLock.Unlock()
 	ctrlAction := CtrlAction{
 		Action: action,
 		Seq:    seq,
 		Params: params,
 	}
 
-	responseChan := make(chan *CtrlResponse)
-	vpnOngoingRequests[seq] = responseChan
+	responseChan := make(chan *CtrlResponse, 1)
+	vpnOngoingRequests[ctrlAction.Seq] = responseChan
 	seq++
+	vpnLock.Unlock()
 
 	jsonData, err := json.Marshal(ctrlAction)
 	if err != nil {
@@ -55,7 +55,9 @@ func CallVpnCtrlAction(action string, params map[string]interface{}) (*CtrlRespo
 
 	select {
 	case response := <-responseChan:
-		delete(vpnOngoingRequests, seq)
+		vpnLock.Lock()
+		delete(vpnOngoingRequests, ctrlAction.Seq)
+		vpnLock.Unlock()
 		if response.Error != "" {
 			return nil, ErrorfL(
 				&scopedLogger,
@@ -64,9 +66,10 @@ func CallVpnCtrlAction(action string, params map[string]interface{}) (*CtrlRespo
 			)
 		}
 		return response, nil
-	case <-time.After(10 * time.Second):
-		close(responseChan)
-		delete(vpnOngoingRequests, seq)
+	case <-time.After(30 * time.Second):
+		vpnLock.Lock()
+		delete(vpnOngoingRequests, ctrlAction.Seq)
+		vpnLock.Unlock()
 		return nil, ErrorfL(&scopedLogger, "timeout waiting for response", nil)
 	}
 }
@@ -173,9 +176,15 @@ func handleVpnCtrlClient(conn net.Conn) {
 		scopedLogger.Trace().Interface("data", vpnResp).Msg("vpn sock msg")
 
 		if vpnResp.Seq != 0 {
+			vpnLock.Lock()
 			responseChan, ok := vpnOngoingRequests[vpnResp.Seq]
+			vpnLock.Unlock()
 			if ok {
-				responseChan <- &vpnResp
+				select {
+				case responseChan <- &vpnResp:
+				default:
+					scopedLogger.Warn().Int32("seq", vpnResp.Seq).Msg("dropping vpn response for completed request")
+				}
 			}
 		}
 		switch vpnResp.Event {

@@ -15,7 +15,6 @@ import Fieldset from "@components/Fieldset";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { RemoteVirtualMediaState, useMountMediaStore } from "@/hooks/stores";
 import notifications from "@/notifications";
-import { SettingsItem } from "@components/Settings/SettingsView";
 import { FileUploader } from "@components/FileManager/FileUploader";
 import ViewHeader from "@/layout/components_side/VirtualMediaSource/ViewHeader";
 import { UsbModeSelector } from "@components/FileManager/Mount";
@@ -25,16 +24,11 @@ import { PreUploadedImageItem } from "@components/PreUploadedImageItem";
 
 export interface FileManagerProps {
   storageType: 'kvm' | 'sd';
-  showAutoMount?: boolean;
-  autoMountTitle?: string;
-  autoMountDescription?: string;
 
   listFilesApi: string;
   getSpaceApi: string;
   deleteFileApi: string;
   mountApi: string;
-  getAutoMountApi?: string;
-  setAutoMountApi?: string;
   unmountApi?: string;
 
   onMountSuccess?: () => void;
@@ -55,7 +49,7 @@ export interface StorageSpace {
 
 const isMountableVirtualMediaFile = (filename: string) => {
   const lower = filename.toLowerCase();
-  return lower.endsWith(".img") || lower.endsWith(".iso");
+  return lower.endsWith(".img") || lower.endsWith(".iso") || lower.endsWith(".incomplete");
 };
 
 
@@ -76,15 +70,10 @@ const LoadingOverlay: React.FC = () => {
 
 export default function ImageManager({
                                       storageType,
-                                      showAutoMount = false,
-                                      autoMountTitle = "Automatically mount system_info.img",
-                                      autoMountDescription = "Mount system_info.img automatically when the KVM startup",
                                       listFilesApi,
                                       getSpaceApi,
                                       deleteFileApi,
                                       mountApi,
-                                      getAutoMountApi,
-                                      setAutoMountApi,
                                       unmountApi,
                                       onMountSuccess,
                                       customActions,
@@ -99,7 +88,7 @@ export default function ImageManager({
   const [usbMode, setUsbMode] = useState<RemoteVirtualMediaState["mode"]>("CDROM");
   const [currentPage, setCurrentPage] = useState(1);
   const [mountInProgress, setMountInProgress] = useState(false);
-  const [autoMountSystemInfo, setAutoMountSystemInfo] = useState(false);
+  const [autoMountImage, setAutoMountImage] = useState<{filename: string, source: string} | null>(null);
   const [storageSpace, setStorageSpace] = useState<StorageSpace | null>(null);
   const { remoteVirtualMediaState, setRemoteVirtualMediaState } = useMountMediaStore();
   const [sdMountStatus, setSDMountStatus] = useState<"ok" | "none" | "fail" | null>(storageType === 'sd' ? null : 'ok');
@@ -150,20 +139,25 @@ export default function ImageManager({
     setLoading(false);
   };
 
-  const handleUnmountSDStorage = async () => {
-    if(!unmountApi) return;
+  const handleUnmountSDStorage = () => {
+    if (!unmountApi) return;
     setLoading(true);
-    send(unmountApi, {}, res => {
+    send(unmountApi, {}, async res => {
       if ("error" in res) {
-        notifications.error(`Failed to unmount SD card`);
+        const errorMsg = (res.error.data as string) || res.error.message || "";
+        if (errorMsg.includes("device or resource busy")) {
+          notifications.error($at("Host has not released the device yet, please safely eject the drive on the host first"));
+        } else {
+          notifications.error(`Failed to unmount SD card: ${errorMsg}`);
+        }
         setLoading(false);
         return;
       }
+      await new Promise(r => setTimeout(r, 2000));
       setSDMountStatus(null);
       checkSDStatus();
+      setLoading(false);
     });
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setLoading(false);
   };
 
   const handleFormatSDStorage = async () => {
@@ -214,17 +208,15 @@ export default function ImageManager({
       setStorageSpace(res.result as StorageSpace);
     });
 
-    if (showAutoMount && getAutoMountApi) {
-      send(getAutoMountApi, {}, resp => {
-        if ("error" in resp) {
-          notifications.error(`Failed to load auto mount system_info.img: ${resp.error.data || "Unknown error"}`);
-          setAutoMountSystemInfo(false);
-        } else {
-          setAutoMountSystemInfo(resp.result as boolean);
-        }
-      });
-    }
-  }, [send, listFilesApi, getSpaceApi, showAutoMount, getAutoMountApi, storageType, sdMountStatus]);
+    send("getAutoMountImage", {}, resp => {
+      if ("error" in resp) {
+        notifications.error(`Failed to load auto mount image: ${resp.error.data || "Unknown error"}`);
+        setAutoMountImage(null);
+      } else {
+        setAutoMountImage(resp.result as {filename: string, source: string} | null);
+      }
+    });
+  }, [send, listFilesApi, getSpaceApi, storageType, sdMountStatus]);
 
   useEffect(() => {
     if (storageType === 'sd') {
@@ -293,17 +285,27 @@ export default function ImageManager({
     });
   }, [selectedFile, usbMode, send, mountApi, onMountSuccess, navigate]);
 
-  const handleAutoMountSystemInfoChange = useCallback((value: boolean) => {
-    if (!setAutoMountApi) return;
+  const handleAutoMountChange = useCallback((enabled: boolean) => {
+    if (!selectedFile) return;
 
-    send(setAutoMountApi, { enabled: value }, response => {
-      if ("error" in response) {
-        notifications.error(`Failed to set auto mount system_info.img: ${response.error.message}`);
-        return;
-      }
-      setAutoMountSystemInfo(value);
-    });
-  }, [send, setAutoMountApi]);
+    if (enabled) {
+      send("setAutoMountImage", { filename: selectedFile, source: storageType }, response => {
+        if ("error" in response) {
+          notifications.error(`Failed to set auto mount: ${response.error.message}`);
+          return;
+        }
+        setAutoMountImage({ filename: selectedFile, source: storageType });
+      });
+    } else {
+      send("setAutoMountImage", { filename: "", source: "" }, response => {
+        if ("error" in response) {
+          notifications.error(`Failed to clear auto mount: ${response.error.message}`);
+          return;
+        }
+        setAutoMountImage(null);
+      });
+    }
+  }, [selectedFile, storageType, send]);
 
   const handlePreviousPage = useCallback(() => {
     setCurrentPage(prev => Math.max(prev - 1, 1));
@@ -388,23 +390,6 @@ export default function ImageManager({
         title={$at("Mount from KVM Storage")}
         description={$at("Select the image you want to mount from the KVM storage")}
       />
-      {showAutoMount && (
-        <div className="w-full animate-fadeIn opacity-0" style={{ animationDuration: "0.7s", animationDelay: "0.1s" }}>
-          <SettingsItem
-            title={$at(autoMountTitle)}
-            description={$at(autoMountDescription)}
-            noCol
-          >
-            <Checkbox
-              checked={autoMountSystemInfo}
-              onChange={(e) => handleAutoMountSystemInfoChange(e.target.checked)}
-            />
-          </SettingsItem>
-        </div>
-      )}
-
-      {showAutoMount && <hr className="border-slate-800/20 dark:border-slate-300/20" />}
-
       <div className="w-full animate-fadeIn opacity-0 px-0.5" style={{ animationDuration: "0.7s", animationDelay: "0.1s" }}>
         <div className="relative">
           <Card>
@@ -432,6 +417,7 @@ export default function ImageManager({
                     uploadedAt={file.createdAt}
                     isIncomplete={file.name.endsWith(".incomplete")}
                     isSelected={selectedFile === file.name}
+                    isAutoMounted={autoMountImage?.filename === file.name && autoMountImage?.source === storageType}
                     onDelete={() => handleDeleteFile(file)}
                     onSelected={() => handleSelectFile(file)}
                     onDownload={() => undefined}
@@ -444,7 +430,6 @@ export default function ImageManager({
                     }}
                   />
                 ))}
-
                 {storageFiles.length > filesPerPage && (
                   <div className="flex items-center justify-between px-3 py-2">
                     <p className="text-sm text-slate-700 dark:text-slate-300">
@@ -485,8 +470,16 @@ export default function ImageManager({
           <Fieldset disabled={selectedFile === null}>
             <UsbModeSelector usbMode={usbMode} setUsbMode={setUsbMode} />
           </Fieldset>
+          {selectedFile && (
+            <label className="flex items-center gap-x-2 cursor-pointer">
+              <Checkbox
+                checked={autoMountImage?.filename === selectedFile && autoMountImage?.source === storageType}
+                onChange={(e) => handleAutoMountChange(e.target.checked)}
+              />
+              <span className="text-sm text-slate-700 dark:text-slate-300">Auto Mount</span>
+            </label>
+          )}
           <div className="flex items-center gap-x-2">
-            
             <AntdButton
               disabled={selectedFile === null || mountInProgress}
               type="primary"
@@ -497,14 +490,18 @@ export default function ImageManager({
         </div>
       )}
 
-      <hr className="border-slate-800/20 dark:border-slate-300/20" />
-      <div className="animate-fadeIn space-y-2 opacity-0" style={{ animationDuration: "0.7s", animationDelay: "0.20s" }}>
-        <StorageSpaceBar
-          percentageUsed={percentageUsed}
-          bytesUsed={storageSpace?.bytesUsed || 0}
-          bytesFree={storageSpace?.bytesFree || 0}
-        />
-      </div>
+      {!uploadFile && (
+        <>
+          <hr className="border-slate-800/20 dark:border-slate-300/20" />
+          <div className="animate-fadeIn space-y-2 opacity-0" style={{ animationDuration: "0.7s", animationDelay: "0.20s" }}>
+            <StorageSpaceBar
+              percentageUsed={percentageUsed}
+              bytesUsed={storageSpace?.bytesUsed || 0}
+              bytesFree={storageSpace?.bytesFree || 0}
+            />
+          </div>
+        </>
+      )}
 
       {unmountApi && storageType === 'sd' && (
         <div className="animate-fadeIn space-y-2 opacity-0"

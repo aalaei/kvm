@@ -1,5 +1,5 @@
 import { useLoaderData } from "react-router-dom";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button as AntdButton, Select ,Checkbox} from "antd";
 import {useReactAt} from 'i18n-auto-extractor/react'
 import { isMobile } from "react-device-detect";
@@ -24,6 +24,7 @@ import { Dialog } from "@/layout/components_setting/access/auth";
 import AutoHeight from "@components/AutoHeight";
 import FirewallSettings from "./FirewallSettings";
 import WebRtcServersSettings from "./WebRtcServers";
+import LoadingSpinner from "@components/LoadingSpinner";
 
 export interface TailScaleResponse {
   state: string;
@@ -71,7 +72,27 @@ export interface CloudflaredRunningResponse {
   running: boolean;
 }
 
-type ManagedVpnTool = "frpc" | "easytier" | "vnt" | "cloudflared";
+export interface NetbirdStatusResponse {
+  running: boolean;
+  connected: boolean;
+  state: string; // down, disconnected, starting, needs_auth, connected_no_port, connected, unknown
+  ip: string;
+  fqdn: string;
+  ssoLoginUrl: string;
+  version: string;
+  managementUrl: string;
+  unknownReason?: string;
+  statusOutput?: string;
+}
+
+export interface VpnAutoStartStatusResponse {
+  tool: string;
+  status: string;
+  attempts: number;
+  maxRetries: number;
+  lastError: string;
+}
+type ManagedVpnTool = "frpc" | "easytier" | "vnt" | "cloudflared" | "netbird";
 
 export interface VpnToolSystemInfo {
   goos: string;
@@ -155,6 +176,7 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
   const { setModalView } = useLocalAuthModalStore();
   const [send] = useJsonRpc();
 
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
 
   const [tlsMode, setTlsMode] = useState<string>("disabled");
@@ -162,6 +184,8 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
   const [tlsKey, setTlsKey] = useState<string>("");
 
   const [activeTab, setActiveTab] = useState("tailscale");
+  const [vpnAutoStartStatusMap, setVpnAutoStartStatusMap] = useState<Record<string, VpnAutoStartStatusResponse>>({});
+  const vpnAutoStartLogRef = useRef<Record<string, string>>({});
     
   const tailScaleConnectionState = useVpnStore(state => state.tailScaleConnectionState);
   const tailScaleLoginUrl = useVpnStore(state => state.tailScaleLoginUrl);
@@ -171,6 +195,8 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
   const setTailScaleLoginUrl = useVpnStore(state => state.setTailScaleLoginUrl); 
   const setTailScaleXEdge = useVpnStore(state => state.setTailScaleXEdge);
   const setTailScaleIP = useVpnStore(state => state.setTailScaleIP);
+  const [tailScaleStatusLoading, setTailScaleStatusLoading] = useState(false);
+  const [tailScaleActionLoading, setTailScaleActionLoading] = useState(false);
   
   const zeroTierConnectionState = useVpnStore(state => state.zeroTierConnectionState);
   const zeroTierNetworkID = useVpnStore(state => state.zeroTierNetworkID);
@@ -239,6 +265,22 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
   const [cloudflaredLog, setCloudflaredLog] = useState<string>("");
   const [showCloudflaredLogModal, setShowCloudflaredLogModal] = useState(false);
 
+	// Netbird
+	const [netbirdStatus, setNetbirdStatus] = useState<NetbirdStatusResponse>({ running: false, connected: false, state: "down", ip: "", fqdn: "", ssoLoginUrl: "", version: "", managementUrl: "" });
+	const [netbirdManagementUrl, setNetbirdManagementUrl] = useState("");
+	const [showNetbirdStatusModal, setShowNetbirdStatusModal] = useState(false);
+	const [netbirdStatusText, setNetbirdStatusText] = useState<string>("");
+	const [netbirdPolling, setNetbirdPolling] = useState(false);
+	const [netbirdStatusLoading, setNetbirdStatusLoading] = useState(true);
+	const [netbirdStarting, setNetbirdStarting] = useState(false);
+	const [netbirdActionLoading, setNetbirdActionLoading] = useState(false);
+	const [netbirdAutoStartPending, setNetbirdAutoStartPending] = useState(false);
+	const netbirdManagementUrlRef = useRef("");
+	const netbirdAutoStartDeadlineRef = useRef(0);
+	const netbirdAutoStartSuppressedRef = useRef(false);
+	const netbirdBusy = netbirdStatusLoading || netbirdPolling || netbirdStarting || netbirdActionLoading || netbirdAutoStartPending;
+  const activeVpnAutoStartStatus = activeTab === "tailscale" ? vpnAutoStartStatusMap.tailscale : undefined;
+
   const [vpnToolSystemInfo, setVpnToolSystemInfo] = useState<VpnToolSystemInfo | null>(null);
   const [vpnToolStatusMap, setVpnToolStatusMap] = useState<Record<string, VpnToolStatus>>({});
   const [vpnToolReleasesMap, setVpnToolReleasesMap] = useState<Record<string, VpnToolRelease[]>>({});
@@ -250,20 +292,10 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
     frpc: false,
     easytier: false,
     vnt: false,
-    cloudflared: false,
-  });
+		cloudflared: false,
+		netbird: false,
+	});
 
-
-  const getTLSState = useCallback(() => {
-    send("getTLSState", {}, resp => {
-      if ("error" in resp) return console.error(resp.error);
-      const tlsState = resp.result as TLSState;
-
-      setTlsMode(tlsState.mode);
-      if (tlsState.certificate) setTlsCert(tlsState.certificate);
-      if (tlsState.privateKey) setTlsKey(tlsState.privateKey);
-    });
-  }, [send]);
 
   // Function to update TLS state - accepts a mode parameter
   const updateTlsState = useCallback(
@@ -337,7 +369,269 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
     });
   }, [send]);
 
-  const managedTools: ManagedVpnTool[] = ["frpc", "easytier", "vnt", "cloudflared"];
+	// Netbird callbacks
+	const handleCopyNetbirdLink = useCallback(async (text: string) => {
+		try {
+			if (navigator.clipboard?.writeText && window.isSecureContext) {
+				await navigator.clipboard.writeText(text);
+			} else {
+				const textArea = document.createElement("textarea");
+				textArea.value = text;
+				textArea.style.position = "fixed";
+				textArea.style.opacity = "0";
+				document.body.appendChild(textArea);
+				textArea.focus();
+				textArea.select();
+				document.execCommand("copy");
+				document.body.removeChild(textArea);
+			}
+			notifications.success($at("Copied"), { duration: 4000 });
+		} catch {
+			notifications.error("Failed to copy link");
+		}
+	}, [$at]);
+
+	const getNetbirdStatus = useCallback((silent = false) => {
+		if (!silent) {
+			setNetbirdStatusLoading(true);
+		}
+		send("getNetbirdStatus", {}, resp => {
+			if ("error" in resp) {
+				setNetbirdActionLoading(false);
+				if (!silent) {
+					setNetbirdStatusLoading(false);
+					notifications.error(`Failed to get Netbird status: ${resp.error.data || "Unknown error"}`);
+				}
+				return;
+			}
+			const result = resp.result as NetbirdStatusResponse;
+			if (result.state === "unknown") {
+				console.warn("Netbird status resolved to unknown", {
+					state: result.state,
+					unknownReason: result.unknownReason || "",
+					statusOutput: result.statusOutput || "",
+					managementUrl: result.managementUrl || "",
+				});
+			}
+			setNetbirdStatus(result);
+			const savedManagementUrl = result.managementUrl || netbirdManagementUrlRef.current;
+			const netbirdStartupActive =
+				result.running ||
+				result.state === "starting" ||
+				netbirdStarting ||
+				netbirdPolling ||
+				netbirdAutoStartDeadlineRef.current > 0;
+			const shouldTrackAutoStart =
+				Boolean(savedManagementUrl) &&
+				!netbirdAutoStartSuppressedRef.current &&
+				netbirdStartupActive;
+			const reachedStableAutoStartState =
+				result.connected ||
+				result.state === "down" ||
+				result.state === "needs_auth" ||
+				result.state === "connected" ||
+				result.state === "connected_no_port";
+
+			if (!shouldTrackAutoStart) {
+				netbirdAutoStartDeadlineRef.current = 0;
+				setNetbirdAutoStartPending(false);
+			} else {
+				if (netbirdAutoStartDeadlineRef.current === 0) {
+					netbirdAutoStartDeadlineRef.current = Date.now() + 45000;
+				}
+
+				if (reachedStableAutoStartState) {
+					netbirdAutoStartDeadlineRef.current = 0;
+					setNetbirdAutoStartPending(false);
+				} else if (Date.now() < netbirdAutoStartDeadlineRef.current) {
+					setNetbirdAutoStartPending(true);
+				} else {
+					netbirdAutoStartDeadlineRef.current = 0;
+					setNetbirdAutoStartPending(false);
+				}
+			}
+			if (!silent) {
+				setNetbirdStatusLoading(false);
+			}
+			setNetbirdActionLoading(false);
+			// Load saved management URL from config
+			if (result.managementUrl && !netbirdManagementUrlRef.current) {
+				setNetbirdManagementUrl(result.managementUrl);
+			}
+		});
+	}, [send, netbirdPolling, netbirdStarting]);
+
+	useEffect(() => {
+		netbirdManagementUrlRef.current = netbirdManagementUrl;
+	}, [netbirdManagementUrl]);
+
+	const handleStartNetbird = useCallback(() => {
+		netbirdAutoStartSuppressedRef.current = false;
+		netbirdAutoStartDeadlineRef.current = 0;
+		setNetbirdAutoStartPending(false);
+		setNetbirdStarting(true);
+		send("startNetbird", {}, resp => {
+			if ("error" in resp) {
+				setNetbirdStarting(false);
+				notifications.error(`Failed to start Netbird: ${resp.error.data || "Unknown error"}`);
+				return;
+			}
+			notifications.success("Netbird service started");
+			getNetbirdStatus();
+		});
+	}, [send, getNetbirdStatus]);
+
+	const handleStopNetbird = useCallback(() => {
+		netbirdAutoStartSuppressedRef.current = true;
+		netbirdAutoStartDeadlineRef.current = 0;
+		setNetbirdAutoStartPending(false);
+		setNetbirdActionLoading(true);
+		send("stopNetbird", {}, resp => {
+			if ("error" in resp) {
+				setNetbirdActionLoading(false);
+				notifications.error(`Failed to stop Netbird: ${resp.error.data || "Unknown error"}`);
+				return;
+			}
+			notifications.success("Netbird service stopped");
+			setNetbirdStatus(prev => ({ ...prev, running: false, connected: false, state: "down", ip: "", fqdn: "", ssoLoginUrl: "" }));
+			setNetbirdPolling(false);
+			getNetbirdStatus();
+		});
+	}, [getNetbirdStatus, send]);
+
+	const handleNetbirdUp = useCallback(() => {
+		if (!netbirdManagementUrl) {
+			notifications.error("Please enter management URL");
+			return;
+		}
+		netbirdAutoStartSuppressedRef.current = false;
+		netbirdAutoStartDeadlineRef.current = 0;
+		setNetbirdAutoStartPending(false);
+		setNetbirdStatus(prev => ({ ...prev, running: true, connected: false, state: "disconnected", ip: "", fqdn: "", ssoLoginUrl: "" }));
+		setNetbirdPolling(true);
+		send("netbirdUp", { managementUrl: netbirdManagementUrl }, resp => {
+			if ("error" in resp) {
+				notifications.error(`Failed to connect Netbird: ${resp.error.data || "Unknown error"}`);
+				setNetbirdPolling(false);
+				return;
+			}
+			// netbirdUp is now non-blocking, start polling for SSO URL
+		});
+	}, [send, netbirdManagementUrl]);
+
+	const handleNetbirdDown = useCallback(() => {
+		netbirdAutoStartSuppressedRef.current = true;
+		netbirdAutoStartDeadlineRef.current = 0;
+		setNetbirdAutoStartPending(false);
+		setNetbirdActionLoading(true);
+		send("netbirdDown", {}, resp => {
+			if ("error" in resp) {
+				setNetbirdActionLoading(false);
+				notifications.error(`Failed to disconnect Netbird: ${resp.error.data || "Unknown error"}`);
+				return;
+			}
+			notifications.success("Netbird disconnected");
+			setNetbirdStatus(prev => ({ ...prev, connected: false, state: "disconnected", ip: "", fqdn: "", ssoLoginUrl: "" }));
+			setNetbirdPolling(false);
+			getNetbirdStatus();
+		});
+	}, [getNetbirdStatus, send]);
+
+	const handleGetNetbirdStatusText = useCallback(() => {
+		send("getNetbirdStatusText", {}, resp => {
+			if ("error" in resp) {
+				notifications.error(`Failed to get Netbird status: ${resp.error.data || "Unknown error"}`);
+				return;
+			}
+			setNetbirdStatusText(resp.result as string);
+			setShowNetbirdStatusModal(true);
+		});
+	}, [send]);
+
+	useEffect(() => {
+		getNetbirdStatus();
+	}, [getNetbirdStatus]);
+
+	useEffect(() => {
+		if (activeTab !== "netbird") return;
+		const timer = setInterval(() => {
+			getNetbirdStatus(true);
+		}, 5000);
+		return () => {
+			clearInterval(timer);
+		};
+	}, [activeTab, getNetbirdStatus]);
+
+	useEffect(() => {
+		if (activeTab !== "netbird" || !netbirdAutoStartPending) return;
+		const timer = setInterval(() => {
+			getNetbirdStatus(true);
+		}, 2000);
+		return () => {
+			clearInterval(timer);
+		};
+	}, [activeTab, getNetbirdStatus, netbirdAutoStartPending]);
+
+	useEffect(() => {
+		if (netbirdStarting && netbirdStatus.running) {
+			setNetbirdStarting(false);
+		}
+	}, [netbirdStarting, netbirdStatus.running]);
+
+	useEffect(() => {
+		if (!netbirdPolling) return;
+		const timer = setInterval(() => {
+			send("getNetbirdUpLog", {}, resp => {
+				if ("error" in resp) return;
+				const result = resp.result as NetbirdStatusResponse;
+				if (result.state === "unknown") {
+					console.warn("Netbird up polling resolved to unknown", {
+						state: result.state,
+						unknownReason: result.unknownReason || "",
+						statusOutput: result.statusOutput || "",
+						managementUrl: result.managementUrl || "",
+					});
+				}
+				if (result.ssoLoginUrl) {
+					setNetbirdStatus(prev => ({
+						...prev,
+						running: result.running,
+						connected: false,
+						state: "needs_auth",
+						ssoLoginUrl: result.ssoLoginUrl,
+						ip: "",
+						fqdn: "",
+					}));
+					setNetbirdPolling(false); // SSO URL found, stop polling
+					return;
+				}
+				if (result.connected) {
+					console.log("Netbird connected");
+					setNetbirdStatus(prev => ({
+						...prev,
+						running: result.running,
+						connected: true,
+						state: result.state || "connected",
+						ssoLoginUrl: "",
+						ip: result.ip,
+						fqdn: result.fqdn,
+					}));
+					setNetbirdPolling(false);
+				}
+			});
+		}, 2000);
+		const timeout = setTimeout(() => {
+			setNetbirdPolling(false);
+			getNetbirdStatus();
+			notifications.error("Netbird connection timeout, please check your network or try again");
+		}, 60000);
+		return () => {
+			clearInterval(timer);
+			clearTimeout(timeout);
+		};
+	}, [getNetbirdStatus, netbirdPolling, send]);
+
+	const managedTools: ManagedVpnTool[] = ["frpc", "easytier", "vnt", "cloudflared", "netbird"];
 
   const getVpnToolSystemInfo = useCallback(() => {
     send("getVpnToolSystemInfo", {}, resp => {
@@ -512,19 +806,113 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
 
   // Fetch device ID and cloud state on component mount
   useEffect(() => {
-    getTLSState();
+    let pending = 2;
+    const checkDone = () => {
+      pending--;
+      if (pending <= 0) setDataLoaded(true);
+    };
 
-    send("getDeviceID", {}, async resp => {
-      if ("error" in resp) return console.error(resp.error);
-      setDeviceId(resp.result as string);
+    send("getTLSState", {}, resp => {
+      if ("error" in resp) {
+        console.error(resp.error);
+      } else {
+        const tlsState = resp.result as TLSState;
+        setTlsMode(tlsState.mode);
+        if (tlsState.certificate) setTlsCert(tlsState.certificate);
+        if (tlsState.privateKey) setTlsKey(tlsState.privateKey);
+      }
+      checkDone();
     });
-  }, [send, getTLSState]);
+
+    send("getDeviceID", {}, resp => {
+      if ("error" in resp) {
+        console.error(resp.error);
+      } else {
+        setDeviceId(resp.result as string);
+      }
+      checkDone();
+    });
+  }, [send]);
+
+  const getVpnAutoStartStatus = useCallback(() => {
+    send("getVpnAutoStartStatus", {}, resp => {
+      if ("error" in resp) return;
+      setVpnAutoStartStatusMap((resp.result as Record<string, VpnAutoStartStatusResponse>) || {});
+    });
+  }, [send]);
+
+  useEffect(() => {
+    getVpnAutoStartStatus();
+    const timer = setInterval(() => {
+      getVpnAutoStartStatus();
+    }, 5000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [getVpnAutoStartStatus]);
+
+  useEffect(() => {
+    Object.values(vpnAutoStartStatusMap).forEach(status => {
+      if (status.status !== "retrying" && status.status !== "failed") return;
+      const logKey = `${status.status}:${status.attempts}:${status.lastError}`;
+      if (vpnAutoStartLogRef.current[status.tool] === logKey) return;
+      vpnAutoStartLogRef.current[status.tool] = logKey;
+      console.error("VPN auto start failed", {
+        tool: status.tool,
+        status: status.status,
+        attempts: status.attempts,
+        maxRetries: status.maxRetries,
+        lastError: status.lastError,
+      });
+    });
+  }, [vpnAutoStartStatusMap]);
+
+  const normalizeTailScaleState = useCallback((state?: string) => {
+    if (["closed", "connecting", "connected", "disconnected", "logined"].includes(state || "")) {
+      return state as "closed" | "connecting" | "connected" | "disconnected" | "logined";
+    }
+    return "disconnected";
+  }, []);
+
+  const applyTailScaleResult = useCallback((result: TailScaleResponse) => {
+    setTailScaleConnectionState(normalizeTailScaleState(result.state));
+    setTailScaleLoginUrl(result.loginUrl || "");
+    setTailScaleIP(result.ip || "");
+    if (typeof result.xEdge === "boolean") {
+      setTailScaleXEdge(result.xEdge);
+    }
+  }, [normalizeTailScaleState, setTailScaleConnectionState, setTailScaleIP, setTailScaleLoginUrl, setTailScaleXEdge]);
+
+  const getTailScaleStatus = useCallback((silent = false) => {
+    if (!silent) {
+      setTailScaleStatusLoading(true);
+    }
+    send("getTailScaleSettings", {}, resp => {
+      if ("error" in resp) {
+        setTailScaleActionLoading(false);
+        if (!silent) {
+          setTailScaleStatusLoading(false);
+          notifications.error(`Failed to get TailScale status: ${resp.error.data || "Unknown error"}`);
+        }
+        return;
+      }
+      applyTailScaleResult(resp.result as TailScaleResponse);
+      setTailScaleActionLoading(false);
+      if (!silent) {
+        setTailScaleStatusLoading(false);
+      }
+    });
+  }, [applyTailScaleResult, send]);
+
+  const tailScaleBusy = tailScaleStatusLoading || tailScaleActionLoading || tailScaleConnectionState === "connecting";
 
   const handleTailScaleLogin = useCallback(() => {
     setTailScaleConnectionState("connecting");
+    setTailScaleActionLoading(true);
 
     send("loginTailScale", { xEdge: tailScaleXEdge }, resp => {
       if ("error" in resp) {
+        setTailScaleActionLoading(false);
         notifications.error(
           `Failed to login TailScale: ${resp.error.data || "Unknown error"}`,
         );
@@ -533,15 +921,10 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
         setTailScaleIP("");
         return;
       }
-      const result = resp.result as TailScaleResponse;
-      const validState = ["closed", "connecting", "connected", "disconnected" , "logined"].includes(result.state)
-      ? result.state as "closed" | "connecting" | "connected" | "disconnected" | "logined"
-      : "closed";
-      setTailScaleConnectionState(validState);
-      setTailScaleLoginUrl(result.loginUrl);
-      setTailScaleIP(result.ip);
+      applyTailScaleResult(resp.result as TailScaleResponse);
+      setTailScaleActionLoading(false);
     });
-  }, [send, tailScaleXEdge]);
+  }, [applyTailScaleResult, send, tailScaleXEdge]);
 
   const handleTailScaleXEdgeChange = (enabled: boolean) => {
     setTailScaleXEdge(enabled);
@@ -549,37 +932,54 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
 
   const handleTailScaleLogout = useCallback(() => { 
     setIsDisconnecting(true);
+    setTailScaleActionLoading(true);
     send("logoutTailScale", {}, resp => {
       if ("error" in resp) {
         notifications.error(
           `Failed to logout TailScale: ${resp.error.data || "Unknown error"}`,
         );  
         setIsDisconnecting(false);
+        setTailScaleActionLoading(false);
         return;
       }
       setTailScaleConnectionState("disconnected"); 
       setTailScaleLoginUrl("");
       setTailScaleIP("");  
       setIsDisconnecting(false);
+      getTailScaleStatus();
     });
-  },[send]);
+  },[getTailScaleStatus, send, setTailScaleConnectionState, setTailScaleIP, setTailScaleLoginUrl]);
 
   const handleTailScaleCancel = useCallback(() => { 
     setIsDisconnecting(true);
+    setTailScaleActionLoading(true);
     send("cancelTailScale", {}, resp => {
       if ("error" in resp) {
         notifications.error(
           `Failed to cancel TailScale: ${resp.error.data || "Unknown error"}`,
         );  
         setIsDisconnecting(false);
+        setTailScaleActionLoading(false);
         return;
       }
       setTailScaleConnectionState("disconnected"); 
       setTailScaleLoginUrl("");
       setTailScaleIP("");  
       setIsDisconnecting(false);
+      getTailScaleStatus();
     });
-  },[send]);
+  },[getTailScaleStatus, send, setTailScaleConnectionState, setTailScaleIP, setTailScaleLoginUrl]);
+
+  useEffect(() => {
+    if (activeTab !== "tailscale") return;
+    getTailScaleStatus();
+    const timer = setInterval(() => {
+      getTailScaleStatus(true);
+    }, 3000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [activeTab, getTailScaleStatus]);
 
   const handleZeroTierLogin = useCallback(() => {  
     setZeroTierConnectionState("connecting");
@@ -1093,26 +1493,20 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
               {label} {$at("Version Manager")}
             </span>
             <div className="flex items-center gap-x-2">
-              <Button
-                size="SM"
-                theme="light"
-                text={$at("Refresh")}
-                onClick={() => refreshVpnToolManager(tool, installPanelOpen)}
-                disabled={busy || installRunning}
-              />
-              <Button
-                size="SM"
-                theme="light"
-                text={installPanelOpen ? $at("Hide Install Actions") : $at("Show Install Actions")}
-                onClick={() => {
-                  const nextOpen = !installPanelOpen;
-                  setVpnToolInstallPanelOpenMap(prev => ({ ...prev, [tool]: nextOpen }));
-                  if (nextOpen) {
-                    listVpnToolReleases(tool);
-                  }
-                }}
-                disabled={busy || installRunning}
-              />
+					{/* Hide Install Actions button as requested */}
+					{/* <Button
+						size="SM"
+						theme="light"
+						text={$at("Hide Install Actions")} : $at("Show Install Actions")}
+						onClick={() => {
+							const nextOpen = !installPanelOpen;
+							setVpnToolInstallPanelOpenMap(prev => ({ ...prev, [tool]: nextOpen }));
+							if (nextOpen) {
+								listVpnToolReleases(tool);
+							}
+						}}
+						disabled={busy || installRunning}
+					/> */}
             </div>
           </div>
 
@@ -1219,6 +1613,20 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
     );
   };
 
+
+  if (!dataLoaded) {
+    return (
+      <div className="space-y-4">
+        <SettingsPageHeader
+          title={$at("Access")}
+          description={$at("Manage the Access Control of the device")}
+        />
+        <div className="flex items-center justify-center py-12">
+          <LoadingSpinner className="h-6 w-6" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -1377,7 +1785,8 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
               { id: "easytier", label: "EasyTier" },
               { id: "vnt", label: "Vnt" },
               { id: "cloudflared", label: "CloudFlare" },
-              { id: "frp", label: "Frp" },
+				      { id: "frp", label: "Frp" },
+				      { id: "netbird", label: "Netbird" },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -1398,6 +1807,22 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
         </div>
 
         <div>
+          {activeVpnAutoStartStatus?.status === "failed" && (
+            <div className="mb-4 rounded-md border border-red-300/60 bg-red-50/80 p-3 dark:border-red-700/60 dark:bg-red-950/20">
+              <div className="text-sm font-medium text-red-700 dark:text-red-300">
+                Auto start failed
+              </div>
+              <div className="mt-1 text-xs text-red-600 dark:text-red-400">
+                {`Tool: ${activeVpnAutoStartStatus.tool} | Attempts: ${activeVpnAutoStartStatus.attempts} | Retries: ${activeVpnAutoStartStatus.maxRetries}`}
+              </div>
+              {activeVpnAutoStartStatus.lastError && (
+                <pre className="mt-2 whitespace-pre-wrap break-all text-xs text-red-700 dark:text-red-300">
+                  {activeVpnAutoStartStatus.lastError}
+                </pre>
+              )}
+            </div>
+          )}
+
           {activeTab === "tailscale" && (
                 <AutoHeight>
                   <GridCard>
@@ -1410,88 +1835,98 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
                           </span>
                         </div>
 
-                        {/* TailScale use xEdge server - checkbox on the right */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-slate-700 dark:text-slate-300">
-                            {$at("TailScale use xEdge server")}
-                          </span>
-                          <Checkbox 
-                            disabled={tailScaleConnectionState !== "disconnected"}
-                            checked={tailScaleXEdge}
-                            onChange={e => {
-                              if (tailScaleConnectionState !== "disconnected") {
-                                notifications.error("TailScale is running and this setting cannot be modified");
-                                return;
-                              }
-                              handleTailScaleXEdgeChange(e.target.checked);
-                            }}
-                          />
-                        </div>
+                        {tailScaleBusy && (
+                          <div className="flex items-center text-[rgba(22,152,217,1)] dark:text-[rgba(45,106,229,1)]">
+                            <LoadingSpinner className="h-4 w-4" />
+                          </div>
+                        )}
 
-                        {tailScaleConnectionState === "connecting" && (
-                          <div className="flex items-center justify-between gap-x-2">
-                            <p>Connecting...</p>
+                        <div className={tailScaleBusy ? "pointer-events-none opacity-50" : ""}>
+                          {/* TailScale use xEdge server - checkbox on the right */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-slate-700 dark:text-slate-300">
+                              {$at("TailScale use xEdge server")}
+                            </span>
+                            <Checkbox
+                              disabled={tailScaleBusy || tailScaleConnectionState !== "disconnected"}
+                              checked={tailScaleXEdge}
+                              onChange={e => {
+                                if (tailScaleConnectionState !== "disconnected") {
+                                  notifications.error("TailScale is running and this setting cannot be modified");
+                                  return;
+                                }
+                                handleTailScaleXEdgeChange(e.target.checked);
+                              }}
+                            />
+                          </div>
+
+                          {tailScaleConnectionState === "connecting" && (
+                            <div className="flex items-center justify-between gap-x-2">
+                              <p>Connecting...</p>
+                              <Button
+                                size="SM"
+                                theme="light"
+                                text={$at("Cancel")}
+                                onClick={handleTailScaleCancel}
+                                disabled={isDisconnecting}
+                              />
+                            </div>
+                          )}
+
+                          {tailScaleConnectionState === "connected" && (
+                            <div className="space-y-4">
+                              <div className="flex items-center gap-x-2 justify-between">
+                                {tailScaleLoginUrl && (
+                                  <p>{$at("Login URL:")} <a href={tailScaleLoginUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400">LoginUrl</a></p>
+                                )}
+                                {!tailScaleLoginUrl && (
+                                  <p>{$at("Wait to obtain the Login URL")}</p>
+                                )}
+                                <Button
+                                  size="SM"
+                                  theme="danger"
+                                  text={isDisconnecting ? $at("Quitting...") : $at("Quit")}
+                                  onClick={handleTailScaleLogout}
+                                  disabled={isDisconnecting === true || tailScaleActionLoading}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {tailScaleConnectionState === "logined" && (
+                            <div className="space-y-4">
+                              {/* IP and Quit button on the same line */}
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-slate-700 dark:text-slate-300">
+                                  IP: {tailScaleIP}
+                                </span>
+                                <Button
+                                  size="SM"
+                                  theme="danger"
+                                  text={isDisconnecting ? $at("Quitting...") : $at("Quit")}
+                                  onClick={handleTailScaleLogout}
+                                  disabled={isDisconnecting === true || tailScaleActionLoading}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {tailScaleConnectionState === "closed" && (
+                            <div className="text-sm text-red-600 dark:text-red-400">
+                              <p>Connect fail, please retry</p>
+                            </div>
+                          )}
+
+                          {((tailScaleConnectionState === "disconnected") || (tailScaleConnectionState === "closed")) && (
                             <Button
                               size="SM"
-                              theme="light"
-                              text={$at("Cancel")}
-                              onClick={handleTailScaleCancel}
-                            /> 
-                          </div>
-                        )}
-
-                        {tailScaleConnectionState === "connected" && (
-                          <div className="space-y-4">
-                            <div className="flex items-center gap-x-2 justify-between">
-                              {tailScaleLoginUrl && (
-                                <p>{$at("Login URL:")} <a href={tailScaleLoginUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400">LoginUrl</a></p> 
-                              )}
-                              {!tailScaleLoginUrl && (
-                                <p>{$at("Wait to obtain the Login URL")}</p> 
-                              )} 
-                              <Button
-                                size="SM"
-                                theme="danger"
-                                text={isDisconnecting ? $at("Quitting...") : $at("Quit")}
-                                onClick={handleTailScaleLogout}
-                                disabled={isDisconnecting === true}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {tailScaleConnectionState === "logined" && (
-                          <div className="space-y-4">
-                            {/* IP and Quit button on the same line */}
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm text-slate-700 dark:text-slate-300">
-                                IP: {tailScaleIP}
-                              </span>
-                              <Button
-                                size="SM"
-                                theme="danger"
-                                text={isDisconnecting ? $at("Quitting...") : $at("Quit")}
-                                onClick={handleTailScaleLogout}
-                                disabled={isDisconnecting === true}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {tailScaleConnectionState === "closed" && (
-                          <div className="text-sm text-red-600 dark:text-red-400">
-                            <p>Connect fail, please retry</p>
-                          </div>    
-                        )}
-
-                        {((tailScaleConnectionState === "disconnected") || (tailScaleConnectionState === "closed")) && (
-                          <Button
-                            size="SM"
-                            theme="primary"
-                            text={$at("Enable")}
-                            onClick={handleTailScaleLogin}
-                          />
-                        )}
+                              theme="primary"
+                              text={$at("Enable")}
+                              onClick={handleTailScaleLogin}
+                              disabled={tailScaleBusy}
+                            />
+                          )}
+                        </div>
                       </div>
                     </div>
                   </GridCard>
@@ -2074,8 +2509,305 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
                     </div>
                   </GridCard>
                 </AutoHeight>
-          )}
-      </div>
+			)}
+
+			{activeTab === "netbird" && (
+				<AutoHeight>
+					<GridCard>
+						<div className="p-4">
+							<div className="space-y-4">
+								{renderVpnToolManager("netbird", "Netbird")}
+
+								{/* Loading indicator */}
+								{netbirdBusy && (
+									<div className="flex items-center text-[rgba(22,152,217,1)] dark:text-[rgba(45,106,229,1)]">
+										<LoadingSpinner className="h-4 w-4" />
+									</div>
+								)}
+
+								<div className={netbirdBusy ? "pointer-events-none opacity-50" : ""}>
+									{/* Not running state */}
+									{netbirdAutoStartPending && !netbirdStatus.running && (
+										<div className="space-y-4">
+											{netbirdManagementUrl && (
+												<InputFieldWithLabel
+													size="SM"
+													label={$at("Management URL")}
+													value={netbirdManagementUrl}
+													disabled={true}
+													placeholder={$at("Enter management URL")}
+												/>
+											)}
+										</div>
+									)}
+
+									{!netbirdAutoStartPending && !netbirdStatus.running && (
+										<div className="flex items-center gap-x-2">
+											<Button
+												size="SM"
+												theme="primary"
+												text={$at("Start")}
+												onClick={handleStartNetbird}
+												disabled={netbirdStarting}
+											/>
+										</div>
+									)}
+
+									{/* Down state - needs login */}
+									{netbirdStatus.running && netbirdStatus.state === "down" && (
+										<div className="space-y-4">
+											<div className="flex items-end gap-x-2">
+												<InputFieldWithLabel
+													size="SM"
+													label={$at("Management URL")}
+													value={netbirdManagementUrl}
+													onChange={e => setNetbirdManagementUrl(e.target.value)}
+													placeholder={$at("Enter management URL")}
+												/>
+												<Button
+													size="SM"
+													theme="primary"
+													text={netbirdPolling ? $at("Connecting...") : $at("Up")}
+													onClick={handleNetbirdUp}
+													disabled={netbirdPolling}
+												/>
+											</div>
+											<div className="flex items-center gap-x-2">
+												<Button
+													size="SM"
+													theme="danger"
+													text={$at("Stop")}
+													onClick={handleStopNetbird}
+												/>
+											</div>
+										</div>
+									)}
+
+									{netbirdStatus.running && netbirdStatus.state === "starting" && (
+										<div className="space-y-4">
+											<InputFieldWithLabel
+												size="SM"
+												label={$at("Management URL")}
+												value={netbirdManagementUrl}
+												disabled={true}
+												placeholder={$at("Enter management URL")}
+											/>
+											<div className="flex items-center gap-x-2">
+												<Button
+													size="SM"
+													theme="danger"
+													text={$at("Stop")}
+													onClick={handleStopNetbird}
+												/>
+											</div>
+										</div>
+									)}
+
+								{/* Disconnected state - after netbird down or service start */}
+								{netbirdStatus.running && netbirdStatus.state === "disconnected" && (
+									<div className="space-y-4">
+										<div className="flex items-end gap-x-2">
+											<InputFieldWithLabel
+												size="SM"
+												label={$at("Management URL")}
+												value={netbirdManagementUrl}
+												onChange={e => setNetbirdManagementUrl(e.target.value)}
+												placeholder={$at("Enter management URL")}
+											/>
+											<Button
+												size="SM"
+												theme="primary"
+												text={netbirdPolling ? $at("Connecting...") : $at("Up")}
+												onClick={handleNetbirdUp}
+												disabled={netbirdPolling}
+											/>
+										</div>
+										<div className="flex items-center gap-x-2">
+											<Button
+												size="SM"
+												theme="danger"
+												text={$at("Stop")}
+												onClick={handleStopNetbird}
+											/>
+										</div>
+									</div>
+								)}
+
+								{/* Needs auth state - waiting for SSO */}
+								{netbirdStatus.running && netbirdStatus.state === "needs_auth" && (
+									<div className="space-y-4">
+										<InputFieldWithLabel
+											size="SM"
+											label={$at("Management URL")}
+											value={netbirdManagementUrl}
+											disabled={true}
+											placeholder={$at("Enter management URL")}
+										/>
+										{netbirdStatus.ssoLoginUrl && (
+											<div className="space-y-2 rounded-md border border-slate-200/60 p-3 dark:border-slate-700/60">
+												<div className="text-sm font-medium text-slate-700 dark:text-slate-200">
+													{$at("Binding Link")}
+												</div>
+												<div className="flex items-start gap-2">
+													<a
+														href={netbirdStatus.ssoLoginUrl}
+														target="_blank"
+														rel="noopener noreferrer"
+														className="min-w-0 flex-1 break-all text-sm text-blue-600 dark:text-blue-400"
+													>
+														{netbirdStatus.ssoLoginUrl}
+													</a>
+													<Button
+														size="SM"
+														theme="light"
+														text={$at("Copy")}
+														onClick={() => handleCopyNetbirdLink(netbirdStatus.ssoLoginUrl)}
+													/>
+												</div>
+											</div>
+										)}
+										<div className="flex items-center gap-x-2">
+											<Button
+												size="SM"
+												theme="danger"
+												text={$at("Down")}
+												onClick={handleNetbirdDown}
+											/>
+											<Button
+												size="SM"
+												theme="light"
+												text={$at("Status")}
+												onClick={handleGetNetbirdStatusText}
+											/>
+										</div>
+									</div>
+								)}
+
+								{/* Connected no port state */}
+								{netbirdStatus.running && netbirdStatus.state === "connected_no_port" && (
+									<div className="space-y-4">
+										<div className="flex items-center gap-x-2">
+											<InputFieldWithLabel
+												size="SM"
+												label="IP"
+												value={netbirdStatus.ip || ""}
+												disabled={true}
+												placeholder="NetBird IP"
+											/>
+										</div>
+										<div className="flex items-center gap-x-2">
+											<InputFieldWithLabel
+												size="SM"
+												label={$at("Management URL")}
+												value={netbirdManagementUrl}
+												disabled={true}
+												placeholder={$at("Enter management URL")}
+											/>
+										</div>
+										<div className="flex items-center gap-x-2">
+											<Button
+												size="SM"
+												theme="danger"
+												text={$at("Down")}
+												onClick={handleNetbirdDown}
+											/>
+											<Button
+												size="SM"
+												theme="light"
+												text={$at("Status")}
+												onClick={handleGetNetbirdStatusText}
+											/>
+										</div>
+									</div>
+								)}
+
+								{/* Fully connected state */}
+								{netbirdStatus.running && netbirdStatus.state === "connected" && (
+									<div className="space-y-4">
+										<div className="flex items-center gap-x-2">
+											<InputFieldWithLabel
+												size="SM"
+												label="IP"
+												value={netbirdStatus.ip || ""}
+												disabled={true}
+												placeholder="NetBird IP"
+											/>
+										</div>
+										<div className="flex items-center gap-x-2">
+											<InputFieldWithLabel
+												size="SM"
+												label={$at("Management URL")}
+												value={netbirdManagementUrl}
+												disabled={true}
+												placeholder={$at("Enter management URL")}
+											/>
+										</div>
+										<div className="flex items-center gap-x-2">
+											<Button
+												size="SM"
+												theme="danger"
+												text={$at("Down")}
+												onClick={handleNetbirdDown}
+											/>
+											<Button
+												size="SM"
+												theme="light"
+												text={$at("Status")}
+												onClick={handleGetNetbirdStatusText}
+											/>
+										</div>
+									</div>
+								)}
+
+									{/* Unknown state */}
+									{netbirdStatus.running && netbirdStatus.state === "unknown" && (
+										<div className="space-y-4">
+											<div className="text-sm text-yellow-600 dark:text-yellow-400">
+												Unknown status, please try again
+											</div>
+											{netbirdStatus.unknownReason && (
+												<div className="space-y-2 rounded-md border border-yellow-300/60 bg-yellow-50/60 p-3 dark:border-yellow-700/60 dark:bg-yellow-950/20">
+													<div className="text-sm font-medium text-slate-700 dark:text-slate-200">
+														Current Match Condition
+													</div>
+													<pre className="whitespace-pre-wrap break-all text-xs text-slate-600 dark:text-slate-300">
+														{netbirdStatus.unknownReason}
+													</pre>
+												</div>
+											)}
+											{netbirdStatus.statusOutput && (
+												<div className="space-y-2 rounded-md border border-slate-200/60 p-3 dark:border-slate-700/60">
+													<div className="text-sm font-medium text-slate-700 dark:text-slate-200">
+														Current netbird status Output
+													</div>
+													<pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 text-xs text-slate-700 dark:bg-slate-900 dark:text-slate-200">
+														{netbirdStatus.statusOutput}
+													</pre>
+												</div>
+											)}
+											<div className="flex items-center gap-x-2">
+												<Button
+													size="SM"
+													theme="primary"
+													text={$at("Refresh")}
+													onClick={() => getNetbirdStatus()}
+												/>
+												<Button
+													size="SM"
+													theme="danger"
+													text={$at("Stop")}
+													onClick={handleStopNetbird}
+												/>
+											</div>
+										</div>
+									)}
+								</div>
+							</div>
+						</div>
+					</GridCard>
+				</AutoHeight>
+			)}
+		</div>
 
       <LogDialog
         open={showCloudflaredLogModal}
@@ -2147,7 +2879,17 @@ function AccessContent({ setOpenDialog }: { setOpenDialog: (open: boolean) => vo
         }}
         title="Vnt Info"
         description={vntInfo}
-      />
+		/>
+
+		<LogDialog
+			open={showNetbirdStatusModal}
+			onClose={() => {
+				setShowNetbirdStatusModal(false);
+			}}
+			title="Netbird Status"
+			description={netbirdStatusText}
+		/>
+
 
     </div>
     </div>

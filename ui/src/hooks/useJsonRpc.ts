@@ -6,7 +6,7 @@ export interface JsonRpcRequest {
   jsonrpc: string;
   method: string;
   params: object;
-  id: number | string;
+  id?: number | string;
 }
 
 export interface JsonRpcError {
@@ -147,6 +147,30 @@ export function useJsonRpc(onRequest?: (payload: JsonRpcRequest) => void) {
     [rpcDataChannel, forceHttp, onRequest],
   );
 
+  const sendNotification = useCallback(
+    (method: string, params: unknown) => {
+      const payload = { jsonrpc: "2.0", method, params };
+
+      if (forceHttp) {
+        fetch("/api/rpc", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Session-ID": getHttpSessionId(),
+          },
+          body: JSON.stringify(payload),
+        }).catch(err => {
+          console.error("RPC notification over HTTP failed", err);
+        });
+        return;
+      }
+
+      if (rpcDataChannel?.readyState !== "open") return;
+      rpcDataChannel.send(JSON.stringify(payload));
+    },
+    [rpcDataChannel, forceHttp],
+  );
+
   useEffect(() => {
     if (!rpcDataChannel) return;
 
@@ -183,5 +207,5 @@ export function useJsonRpc(onRequest?: (payload: JsonRpcRequest) => void) {
     };
   }, [rpcDataChannel, onRequest]);
 
-  return [send];
+  return [send, sendNotification] as const;
 }

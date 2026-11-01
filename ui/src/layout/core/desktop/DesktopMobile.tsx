@@ -117,7 +117,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
   const mouseY = useMouseStore(state => state.mouseY);
   const allowTapToOpenVirtualKeyboard = useHidStore(state => state.allowTapToOpenVirtualKeyboard);
   const setAllowTapToOpenVirtualKeyboard = useHidStore(state => state.setAllowTapToOpenVirtualKeyboard);
-  const [send] = useJsonRpc();
+  const [send, sendNotification] = useJsonRpc();
   const [leftBtnPos, setLeftBtnPos] = useState({ x: 40, y: 40 });
   const [rightBtnPos, setRightBtnPos] = useState({ x: 120, y: 40 });
   const [wheelPos, setWheelPos] = useState({ x: 184, y: 140 });
@@ -132,9 +132,16 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
   const joystickMovePointerIdRef = useRef<number | null>(null);
   const joystickMoveHoldTimerRef = useRef<number | null>(null);
   const joystickMoveEnabledRef = useRef(false);
-  
+
   const activeButtonsRef = useRef(0);
-  
+  const lastAbsPosRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    if (mouseMode === "absolute") {
+      lastAbsPosRef.current = { x: mouseX, y: mouseY };
+    }
+  }, [mouseX, mouseY, mouseMode]);
+
   useEffect(() => {
     if (isFullscreen) {
       setShowVirtualMouseButtons(false);
@@ -209,7 +216,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
     if (mouseMode === "relative") {
       mouseEvents.sendVirtualRelativeMovement(0, 0, newButtons);
     } else {
-      send("absMouseReport", { x: mouseX, y: mouseY, buttons: newButtons });
+      sendNotification("absMouseReport", { x: lastAbsPosRef.current.x, y: lastAbsPosRef.current.y, buttons: newButtons });
     }
   };
   
@@ -230,7 +237,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
      if (mouseMode === "relative") {
        mouseEvents.sendVirtualRelativeMovement(0, 0, newButtons);
      } else {
-       send("absMouseReport", { x: mouseX, y: mouseY, buttons: newButtons });
+       sendNotification("absMouseReport", { x: lastAbsPosRef.current.x, y: lastAbsPosRef.current.y, buttons: newButtons });
      }
   };
 
@@ -688,37 +695,61 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
                           }}
                         >
                           <div
+                            className="absolute -top-7 left-0 flex items-center gap-1"
+                          >
+                            <div
+                              className={cx(
+                                "flex h-6 w-6 items-center justify-center rounded-full text-white transition-transform duration-100 active:scale-95",
+                                isDark ? "bg-gray-500/70" : "bg-black/30",
+                              )}
+                              style={{ touchAction: "none" }}
+                              onPointerDown={e => {
+                                e.stopPropagation();
+                                handlePointerDown(e, "wheel");
+                              }}
+                              onPointerMove={e => {
+                                e.stopPropagation();
+                                handlePointerMove(e);
+                              }}
+                              onPointerUp={e => {
+                                e.stopPropagation();
+                                handlePointerUp(e, "wheel");
+                              }}
+                            >
+                              <FourWayMoveIcon className="h-4 w-4" />
+                            </div>
+                          </div>
+                          <div
                             className={cx(
                               "flex h-8 w-8 items-center justify-center rounded-full text-white text-xs active:scale-90 transition-transform duration-100",
                               isDark ? "bg-gray-500/70" : "bg-black/30",
                             )}
-                            onClick={() => { send("wheelReport", { wheelY: 1 }); }}
+                            onClick={() => { send("wheelReport", { wheelY: 1, mouseMode }); }}
                           >
                             ▲
                           </div>
                           <div
-                            className="mt-1 flex h-5 w-8 items-center justify-center rounded-full bg-black/45 text-white"
+                            className={cx(
+                              "mt-1 flex h-8 w-8 items-center justify-center rounded-full text-white text-xs font-bold active:scale-90 transition-transform duration-100",
+                              (lockedButtons & 4) ? "bg-green-600/80" : (isDark ? "bg-gray-500/70" : "bg-black/30"),
+                            )}
                             onPointerDown={e => {
                               e.stopPropagation();
-                              handlePointerDown(e, "wheel");
-                            }}
-                            onPointerMove={e => {
-                              e.stopPropagation();
-                              handlePointerMove(e);
+                              updateButtons(4, true);
                             }}
                             onPointerUp={e => {
                               e.stopPropagation();
-                              handlePointerUp(e, "wheel");
+                              updateButtons(4, false);
                             }}
                           >
-                            <FourWayMoveIcon className="h-3 w-3" />
+                            M
                           </div>
                           <div
                             className={cx(
                               "mt-1 flex h-8 w-8 items-center justify-center rounded-full text-white text-xs active:scale-90 transition-transform duration-100",
                               isDark ? "bg-gray-500/70" : "bg-black/30",
                             )}
-                            onClick={() => { send("wheelReport", { wheelY: -1 }); }}
+                            onClick={() => { send("wheelReport", { wheelY: -1, mouseMode }); }}
                           >
                             ▼
                           </div>

@@ -16,7 +16,8 @@ export function PreUploadedImageItem({
                                        onDownload,
                                        onDelete,
                                        onContinueUpload,
-                                       onSelected
+                                       onSelected,
+                                       isAutoMounted
                                      }: {
   name: string;
   size: string;
@@ -27,6 +28,7 @@ export function PreUploadedImageItem({
   onDelete: () => void;
   onContinueUpload: () => void;
   onSelected?: () => void;
+  isAutoMounted?: boolean;
 }) {
   const { $at }= useReactAt();
   const [isHovering, setIsHovering] = useState(false);
@@ -51,8 +53,15 @@ export function PreUploadedImageItem({
     >
       <div className="flex items-center gap-x-4">
         <div className="space-y-0.5 select-none">
-          <div className="text-sm leading-none font-semibold dark:text-white">
-            {formatters.truncateMiddle(name, 45)}
+          <div className="flex items-center gap-x-1.5">
+            <div className="text-sm leading-none font-semibold dark:text-white">
+              {formatters.truncateMiddle(name, 45)}
+            </div>
+            {isAutoMounted && (
+              <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-400 text-black dark:bg-yellow-500 dark:text-white">
+                Auto Mount
+              </span>
+            )}
           </div>
           <div className="flex items-center text-sm">
             <div className="flex items-center gap-x-1 text-slate-600 dark:text-[#ffffff]">

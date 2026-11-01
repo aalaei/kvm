@@ -59,6 +59,13 @@ var vpnToolSpecs = map[string]vpnToolSpec{
 		VersionBinary: "cloudflared",
 		VersionFlags:  [][]string{{"-v"}, {"version"}, {"--version"}},
 	},
+	"netbird": {
+		Name:          "netbird",
+		Repo:          "netbirdio/netbird",
+		Binaries:      []string{"netbird"},
+		VersionBinary: "netbird",
+		VersionFlags:  [][]string{{"version"}},
+	},
 }
 
 type VpnToolSystemInfo struct {

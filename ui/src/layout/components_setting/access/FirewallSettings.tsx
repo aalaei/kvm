@@ -11,8 +11,7 @@ import { GridCard } from "@components/Card";
 import { ConfirmDialog } from "@components/ConfirmDialog";
 
 type FirewallChain = "input" | "output" | "forward";
-type FirewallAction = "accept" | "drop" | "reject";
-
+type FirewallAction = "accept" | "drop" | "reject" | "disabled";
 export interface FirewallConfig {
   base: {
     inputPolicy: FirewallAction;
@@ -54,6 +53,7 @@ const actionOptions: { value: FirewallAction; label: string }[] = [
   { value: "accept", label: "Accept" },
   { value: "drop", label: "Drop" },
   { value: "reject", label: "Reject" },
+  { value: "disabled", label: "Disabled" },
 ];
 
 const chainOptions: { value: FirewallChain; label: string }[] = [
@@ -137,6 +137,9 @@ export default function FirewallSettings() {
   );
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showRulesSubmitConfirm, setShowRulesSubmitConfirm] = useState(false);
+  const [showPortForwardSubmitConfirm, setShowPortForwardSubmitConfirm] = useState(false);
   const [showBaseSubmitConfirm, setShowBaseSubmitConfirm] = useState(false);
 
   const [selectedRuleRows, setSelectedRuleRows] = useState<Set<number>>(new Set());
@@ -158,6 +161,7 @@ export default function FirewallSettings() {
   });
   const [ruleSourcePortText, setRuleSourcePortText] = useState<string>("");
   const [ruleDestinationPortText, setRuleDestinationPortText] = useState<string>("");
+
 
   const [pfModalOpen, setPfModalOpen] = useState(false);
   const [pfEditingIndex, setPfEditingIndex] = useState<number | null>(null);
@@ -187,6 +191,7 @@ export default function FirewallSettings() {
       setBaseDraft(cfg.base);
       setSelectedRuleRows(new Set());
       setSelectedPortForwardRows(new Set());
+      setHasUnsavedChanges(false);
     });
   }, [send, $at]);
 
@@ -213,12 +218,52 @@ export default function FirewallSettings() {
           return;
         }
         setAppliedConfig(nextConfig);
+        setHasUnsavedChanges(false);
         if (opts?.successText) notifications.success(opts.successText);
         if (opts?.onSuccess) opts.onSuccess();
       });
     },
     [send, $at],
   );
+
+  const requestRulesSubmit = useCallback(() => {
+    setShowRulesSubmitConfirm(true);
+  }, []);
+
+  const handleRulesSubmit = useCallback(() => {
+    const nextConfig: FirewallConfig = {
+      ...appliedConfig,
+      base: baseDraft,
+    };
+    applyFirewallConfig(nextConfig, {
+      successText: $at("Firewall config applied"),
+      onSuccess: () => {
+        setShowRulesSubmitConfirm(false);
+      },
+    });
+  }, [appliedConfig, baseDraft, applyFirewallConfig, $at]);
+
+  const requestPortForwardSubmit = useCallback(() => {
+    setShowPortForwardSubmitConfirm(true);
+  }, []);
+
+  const handlePortForwardSubmit = useCallback(() => {
+    const nextConfig: FirewallConfig = {
+      ...appliedConfig,
+      base: baseDraft,
+    };
+    applyFirewallConfig(nextConfig, {
+      successText: $at("Firewall config applied"),
+      onSuccess: () => {
+        setShowPortForwardSubmitConfirm(false);
+      },
+    });
+  }, [appliedConfig, baseDraft, applyFirewallConfig, $at]);
+
+  const requestBaseSubmit = useCallback(() => {
+    if (!hasBaseChanges) return;
+    setShowBaseSubmitConfirm(true);
+  }, [hasBaseChanges]);
 
   const handleBaseSubmit = useCallback(() => {
     const nextConfig: FirewallConfig = { ...appliedConfig, base: baseDraft };
@@ -229,12 +274,6 @@ export default function FirewallSettings() {
       },
     });
   }, [appliedConfig, baseDraft, applyFirewallConfig, $at]);
-
-  const requestBaseSubmit = useCallback(() => {
-    if (!hasBaseChanges) return;
-    setShowBaseSubmitConfirm(true);
-  }, [hasBaseChanges]);
-
   const openAddRule = () => {
     setRuleEditingIndex(null);
     setRuleDraft({
@@ -411,6 +450,38 @@ export default function FirewallSettings() {
     });
   };
 
+  const moveRuleUp = (idx: number) => {
+    if (idx <= 0) return;
+    const newRules = [...appliedConfig.rules];
+    [newRules[idx - 1], newRules[idx]] = [newRules[idx], newRules[idx - 1]];
+    setAppliedConfig({ ...appliedConfig, rules: newRules });
+    setHasUnsavedChanges(true);
+  };
+
+  const moveRuleDown = (idx: number) => {
+    if (idx >= appliedConfig.rules.length - 1) return;
+    const newRules = [...appliedConfig.rules];
+    [newRules[idx], newRules[idx + 1]] = [newRules[idx + 1], newRules[idx]];
+    setAppliedConfig({ ...appliedConfig, rules: newRules });
+    setHasUnsavedChanges(true);
+  };
+
+  const movePortForwardUp = (idx: number) => {
+    if (idx <= 0) return;
+    const newItems = [...appliedConfig.portForwards];
+    [newItems[idx - 1], newItems[idx]] = [newItems[idx], newItems[idx - 1]];
+    setAppliedConfig({ ...appliedConfig, portForwards: newItems });
+    setHasUnsavedChanges(true);
+  };
+
+  const movePortForwardDown = (idx: number) => {
+    if (idx >= appliedConfig.portForwards.length - 1) return;
+    const newItems = [...appliedConfig.portForwards];
+    [newItems[idx], newItems[idx + 1]] = [newItems[idx + 1], newItems[idx]];
+    setAppliedConfig({ ...appliedConfig, portForwards: newItems });
+    setHasUnsavedChanges(true);
+  };
+
   const deleteSelectedPortForwards = () => {
     const idxs = [...selectedPortForwardRows.values()].sort((a, b) => a - b);
     if (!idxs.length) return;
@@ -532,7 +603,7 @@ export default function FirewallSettings() {
                       {$at("Submit")}
                     </AntdButton>
                   </div>
-                  </div>
+                </div>
               </div>
             </GridCard>
           </AutoHeight>
@@ -553,6 +624,19 @@ export default function FirewallSettings() {
                       </AntdButton>
                       <AntdButton danger onClick={deleteSelectedRules} disabled={!selectedRuleRows.size}>
                         {$at("Delete")}
+                      </AntdButton>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <AntdButton onClick={fetchConfig} loading={loading}>
+                        {$at("Refresh")}
+                      </AntdButton>
+                      <AntdButton
+                        type="primary"
+                        onClick={requestRulesSubmit}
+                        loading={applying}
+                        disabled={!hasUnsavedChanges && !hasBaseChanges}
+                      >
+                        {$at("Submit")}
                       </AntdButton>
                     </div>
                   </div>
@@ -606,9 +690,27 @@ export default function FirewallSettings() {
                               <td className="p-2 text-center">{actionLabel(r.action)}</td>
                               <td className="p-2 text-center">{r.comment || "-"}</td>
                               <td className="p-2 text-center">
-                                <AntdButton size="small" onClick={() => openEditRule(idx)}>
-                                  {$at("Edit")}
-                                </AntdButton>
+                                <div className="flex items-center justify-center gap-1">
+                                  <AntdButton
+                                    size="small"
+                                    disabled={idx === 0}
+                                    onClick={() => moveRuleUp(idx)}
+                                    title={$at("Move Up")}
+                                  >
+                                    ↑
+                                  </AntdButton>
+                                  <AntdButton
+                                    size="small"
+                                    disabled={idx === appliedConfig.rules.length - 1}
+                                    onClick={() => moveRuleDown(idx)}
+                                    title={$at("Move Down")}
+                                  >
+                                    ↓
+                                  </AntdButton>
+                                  <AntdButton size="small" onClick={() => openEditRule(idx)}>
+                                    {$at("Edit")}
+                                  </AntdButton>
+                                </div>
                               </td>
                             </tr>
                           ))
@@ -641,6 +743,19 @@ export default function FirewallSettings() {
                         disabled={!selectedPortForwardRows.size}
                       >
                         {$at("Delete")}
+                      </AntdButton>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <AntdButton onClick={fetchConfig} loading={loading}>
+                        {$at("Refresh")}
+                      </AntdButton>
+                      <AntdButton
+                        type="primary"
+                        onClick={requestPortForwardSubmit}
+                        loading={applying}
+                        disabled={!hasUnsavedChanges && !hasBaseChanges}
+                      >
+                        {$at("Submit")}
                       </AntdButton>
                     </div>
                   </div>
@@ -693,9 +808,27 @@ export default function FirewallSettings() {
                               </td>
                               <td className="p-2 text-center">{r.comment || "-"}</td>
                               <td className="p-2 text-center">
-                                <AntdButton size="small" disabled={r.managed === false} onClick={() => openEditPortForward(idx)}>
-                                  {$at("Edit")}
-                                </AntdButton>
+                                <div className="flex items-center justify-center gap-1">
+                                  <AntdButton
+                                    size="small"
+                                    disabled={idx === 0}
+                                    onClick={() => movePortForwardUp(idx)}
+                                    title={$at("Move Up")}
+                                  >
+                                    ↑
+                                  </AntdButton>
+                                  <AntdButton
+                                    size="small"
+                                    disabled={idx === appliedConfig.portForwards.length - 1}
+                                    onClick={() => movePortForwardDown(idx)}
+                                    title={$at("Move Down")}
+                                  >
+                                    ↓
+                                  </AntdButton>
+                                  <AntdButton size="small" disabled={r.managed === false} onClick={() => openEditPortForward(idx)}>
+                                    {$at("Edit")}
+                                  </AntdButton>
+                                </div>
                               </td>
                             </tr>
                           ))
@@ -916,6 +1049,48 @@ export default function FirewallSettings() {
       </Modal>
 
       <ConfirmDialog
+        open={showRulesSubmitConfirm}
+        onClose={() => {
+          setShowRulesSubmitConfirm(false);
+        }}
+        title={$at("Submit Firewall Policies?")}
+        description={
+          <>
+            <p>
+              {$at(
+                "Warning: Adjusting some policies may cause network address loss, leading to device unavailability.",
+              )}
+            </p>
+          </>
+        }
+        variant="warning"
+        cancelText={$at("Cancel")}
+        confirmText={$at("Submit")}
+        onConfirm={handleRulesSubmit}
+      />
+
+      <ConfirmDialog
+        open={showPortForwardSubmitConfirm}
+        onClose={() => {
+          setShowPortForwardSubmitConfirm(false);
+        }}
+        title={$at("Submit Firewall Policies?")}
+        description={
+          <>
+            <p>
+              {$at(
+                "Warning: Adjusting some policies may cause network address loss, leading to device unavailability.",
+              )}
+            </p>
+          </>
+        }
+        variant="warning"
+        cancelText={$at("Cancel")}
+        confirmText={$at("Submit")}
+        onConfirm={handlePortForwardSubmit}
+      />
+
+      <ConfirmDialog
         open={showBaseSubmitConfirm}
         onClose={() => {
           setShowBaseSubmitConfirm(false);
@@ -935,6 +1110,7 @@ export default function FirewallSettings() {
         confirmText={$at("Submit")}
         onConfirm={handleBaseSubmit}
       />
+
     </div>
   );
 }

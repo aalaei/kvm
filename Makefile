@@ -2,8 +2,8 @@ BRANCH    ?= $(shell git rev-parse --abbrev-ref HEAD)
 BUILDDATE ?= $(shell date -u +%FT%T%z)
 BUILDTS   ?= $(shell date -u +%s)
 REVISION  ?= $(shell git rev-parse HEAD)
-VERSION_DEV ?= 0.1.3-dev
-VERSION ?= 0.1.3
+VERSION_DEV ?= 0.1.4-dev
+VERSION ?= 0.1.4
 
 PROMETHEUS_TAG := github.com/prometheus/common/version
 KVM_PKG_NAME := kvm

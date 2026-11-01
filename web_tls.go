@@ -130,6 +130,10 @@ func setTLSState(s TLSState) error {
 		return nil
 	}
 
+	if err := SaveConfig(); err != nil {
+		return fmt.Errorf("failed to save TLS config: %w", err)
+	}
+
 	if config.TLSMode == "" {
 		websecureLogger.Info().Msg("Stopping websecure server, as TLS mode is disabled")
 		stopWebSecureServer()
@@ -204,11 +208,12 @@ func startWebSecureServer() {
 }
 
 func RunWebSecureServer() {
+	// Initialize cert store eagerly so setTLSState can be called
+	// via JSON-RPC even when TLS server has not started yet.
+	initCertStore()
+
 	for range startTLS {
 		websecureLogger.Info().Msg("Starting websecure server, as we have received a start signal")
-		if certStore == nil {
-			initCertStore()
-		}
 		go runWebSecureServer()
 	}
 }

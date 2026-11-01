@@ -39,6 +39,10 @@ type JSONRPCEvent struct {
 	Params  interface{} `json:"params,omitempty"`
 }
 
+func isJSONRPCNotification(request JSONRPCRequest) bool {
+	return request.ID == nil
+}
+
 type DisplayRotationSettings struct {
 	Rotation string `json:"rotation"`
 }
@@ -152,6 +156,10 @@ func onRPCMessage(message webrtc.DataChannelMessage, session *Session) {
 
 	response, _ := DispatchRPCRequest(request)
 
+	if isJSONRPCNotification(request) {
+		return
+	}
+
 	scopedLogger.Trace().Interface("result", response.Result).Msg("RPC handler returned")
 
 	writeJSONRPCResponse(response, session)
@@ -163,6 +171,22 @@ func rpcPing() (string, error) {
 
 type BootStorageTypeResponse struct {
 	Type string `json:"type"`
+}
+
+func rpcGetLocalPackageInfo() (*LocalPackageInfo, error) {
+	return GetLocalPackageInfo()
+}
+
+func rpcClearLocalPackage() error {
+	otaUploadMutex.Lock()
+	defer otaUploadMutex.Unlock()
+
+	if otaState.Updating {
+		return fmt.Errorf("update already in progress")
+	}
+
+	cleanupLocalPackage()
+	return nil
 }
 
 func rpcGetBootStorageType() (*BootStorageTypeResponse, error) {
@@ -369,18 +393,6 @@ func rpcGetNpuAppStatus() (bool, error) {
 	return config.NpuAppEnabled, nil
 }
 
-func rpcGetAutoUpdateState() (bool, error) {
-	return config.AutoUpdateEnabled, nil
-}
-
-func rpcSetAutoUpdateState(enabled bool) (bool, error) {
-	config.AutoUpdateEnabled = enabled
-	if err := SaveConfig(); err != nil {
-		return config.AutoUpdateEnabled, fmt.Errorf("failed to save config: %w", err)
-	}
-	return enabled, nil
-}
-
 func rpcGetEDID() (string, error) {
 	resp, err := CallCtrlAction("get_edid", nil)
 	if err != nil {
@@ -456,18 +468,6 @@ func rpcGetForceHpd() (bool, error) {
 	}
 }
 
-func rpcGetDevChannelState() (bool, error) {
-	return config.IncludePreRelease, nil
-}
-
-func rpcSetDevChannelState(enabled bool) error {
-	config.IncludePreRelease = enabled
-	if err := SaveConfig(); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
-	}
-	return nil
-}
-
 func rpcGetLocalUpdateStatus() (*LocalMetadata, error) {
 	var localStatus LocalMetadata
 	systemVersionLocal, appVersionLocal, err := GetLocalVersion()
@@ -480,8 +480,7 @@ func rpcGetLocalUpdateStatus() (*LocalMetadata, error) {
 }
 
 func rpcGetUpdateStatus() (*UpdateStatus, error) {
-	includePreRelease := config.IncludePreRelease
-	updateStatus, err := GetUpdateStatus(context.Background(), GetDeviceID(), includePreRelease)
+	updateStatus, err := GetUpdateStatus(context.Background(), GetDeviceID())
 	// to ensure backwards compatibility,
 	// if there's an error, we won't return an error, but we will set the error field
 	if err != nil {
@@ -525,9 +524,8 @@ func getSelfSignatureStatus() *SelfSignatureStatus {
 }
 
 func rpcTryUpdate() error {
-	includePreRelease := config.IncludePreRelease
 	go func() {
-		err := TryUpdate(context.Background(), GetDeviceID(), includePreRelease)
+		err := TryUpdate(context.Background(), GetDeviceID())
 		if err != nil {
 			logger.Warn().Err(err).Msg("failed to try update")
 		}
@@ -1116,13 +1114,129 @@ func rpcGetSerialSettings() (SerialSettings, error) {
 
 var serialPortMode = defaultMode
 
+// loadSerialSettingsFromConfig loads serial port settings from config into serialPortMode.
+// Called during LoadConfig to restore persisted settings.
+func loadSerialSettingsFromConfig() {
+	if config == nil {
+		return
+	}
+
+	// Only apply if config has serial settings saved (non-zero baud rate)
+	if config.SerialBaudRate == 0 {
+		logger.Debug().Msg("no serial settings in config, using defaults")
+		return
+	}
+
+	baudRate := config.SerialBaudRate
+	dataBits := config.SerialDataBits
+	if dataBits == 0 {
+		dataBits = 8
+	}
+
+	var stopBits serial.StopBits
+	switch config.SerialStopBits {
+	case "1.5":
+		stopBits = serial.OnePointFiveStopBits
+	case "2":
+		stopBits = serial.TwoStopBits
+	default:
+		stopBits = serial.OneStopBit
+	}
+
+	var parity serial.Parity
+	switch config.SerialParity {
+	case "odd":
+		parity = serial.OddParity
+	case "even":
+		parity = serial.EvenParity
+	case "mark":
+		parity = serial.MarkParity
+	case "space":
+		parity = serial.SpaceParity
+	default:
+		parity = serial.NoParity
+	}
+
+	serialPortMode = &serial.Mode{
+		BaudRate: baudRate,
+		DataBits: dataBits,
+		StopBits: stopBits,
+		Parity:   parity,
+	}
+
+	logger.Info().
+		Int("baud_rate", baudRate).
+		Int("data_bits", dataBits).
+		Str("stop_bits", config.SerialStopBits).
+		Str("parity", config.SerialParity).
+		Msg("serial settings loaded from config")
+}
+
+// saveSerialSettingsToConfig saves current serial port settings to config and persists to disk.
+func saveSerialSettingsToConfig() error {
+	if config == nil {
+		return fmt.Errorf("config not loaded")
+	}
+
+	var stopBits string
+	switch serialPortMode.StopBits {
+	case serial.OnePointFiveStopBits:
+		stopBits = "1.5"
+	case serial.TwoStopBits:
+		stopBits = "2"
+	default:
+		stopBits = "1"
+	}
+
+	var parity string
+	switch serialPortMode.Parity {
+	case serial.OddParity:
+		parity = "odd"
+	case serial.EvenParity:
+		parity = "even"
+	case serial.MarkParity:
+		parity = "mark"
+	case serial.SpaceParity:
+		parity = "space"
+	default:
+		parity = "none"
+	}
+
+	config.SerialBaudRate = serialPortMode.BaudRate
+	config.SerialDataBits = serialPortMode.DataBits
+	config.SerialStopBits = stopBits
+	config.SerialParity = parity
+
+	if err := SaveConfig(); err != nil {
+		return fmt.Errorf("failed to save serial settings: %w", err)
+	}
+
+	logger.Info().
+		Int("baud_rate", serialPortMode.BaudRate).
+		Int("data_bits", serialPortMode.DataBits).
+		Str("stop_bits", stopBits).
+		Str("parity", parity).
+		Msg("serial settings saved to config")
+
+	return nil
+}
+
 func rpcSetSerialSettings(settings SerialSettings) error {
+	logger.Info().
+		Str("baud_rate", settings.BaudRate).
+		Str("data_bits", settings.DataBits).
+		Str("stop_bits", settings.StopBits).
+		Str("parity", settings.Parity).
+		Msg("rpcSetSerialSettings called")
+
 	baudRate, err := strconv.Atoi(settings.BaudRate)
 	if err != nil {
+		logger.Error().Err(err).Msg("invalid baud rate")
 		return fmt.Errorf("invalid baud rate: %v", err)
 	}
 	dataBits, err := strconv.Atoi(settings.DataBits)
 	if err != nil {
+		logger.Error().Err(err).Msg("invalid data bits")
 		return fmt.Errorf("invalid data bits: %v", err)
 	}
 
@@ -1135,6 +1249,7 @@ func rpcSetSerialSettings(settings SerialSettings) error {
 	case "2":
 		stopBits = serial.TwoStopBits
 	default:
+		logger.Error().Str("stop_bits", settings.StopBits).Msg("invalid stop bits")
 		return fmt.Errorf("invalid stop bits: %s", settings.StopBits)
 	}
 
@@ -1151,8 +1266,10 @@ func rpcSetSerialSettings(settings SerialSettings) error {
 	case "space":
 		parity = serial.SpaceParity
 	default:
+		logger.Error().Str("parity", settings.Parity).Msg("invalid parity")
 		return fmt.Errorf("invalid parity: %s", settings.Parity)
 	}
+
 	serialPortMode = &serial.Mode{
 		BaudRate: baudRate,
 		DataBits: dataBits,
@@ -1160,7 +1277,59 @@ func rpcSetSerialSettings(settings SerialSettings) error {
 		Parity:   parity,
 	}
 
-	_ = port.SetMode(serialPortMode)
+	logger.Info().
+		Int("baud_rate", baudRate).
+		Int("data_bits", dataBits).
+		Interface("stop_bits", stopBits).
+		Interface("parity", parity).
+		Msg("serialPortMode updated")
+
+	// Persist settings to config file
+	if err := saveSerialSettingsToConfig(); err != nil {
+		logger.Warn().Err(err).Msg("failed to persist serial settings")
+		// Continue anyway - settings are still applied in memory
+	}
+
+	if port != nil {
+		if err := port.SetMode(serialPortMode); err != nil {
+			logger.Error().Err(err).Msg("failed to set port mode")
+		} else {
+			logger.Info().Msg("port mode updated successfully")
+		}
+	} else {
+		logger.Warn().Msg("serial port is nil, mode will be applied on next open")
+	}
+
+	return nil
+}
+
+// rpcConnectSerial opens the serial port with current settings
+func rpcConnectSerial() error {
+	logger.Info().
+		Int("baud_rate", serialPortMode.BaudRate).
+		Int("data_bits", serialPortMode.DataBits).
+		Msg("rpcConnectSerial called")
+
+	if err := reopenSerialPort(); err != nil {
+		logger.Error().Err(err).Msg("failed to connect serial port")
+		return fmt.Errorf("failed to connect serial port: %w", err)
+	}
+
+	logger.Info().Msg("serial port connected successfully")
+	return nil
+}
+
+// rpcDisconnectSerial closes the serial port
+func rpcDisconnectSerial() error {
+	logger.Info().Msg("rpcDisconnectSerial called")
+
+	if port != nil {
+		port.Close()
+		port = nil
+		logger.Info().Msg("serial port disconnected")
+	} else {
+		logger.Warn().Msg("serial port was already disconnected")
+	}
 
 	return nil
 }
@@ -1502,13 +1671,22 @@ func rpcGetLedGreenMode() (string, error) {
 func rpcGetLedYellowMode() (string, error) {
 	return config.LEDYellowMode, nil
 }
-
-func rpcGetAutoMountSystemInfo() (bool, error) {
-	return config.AutoMountSystemInfo, nil
+func rpcGetAutoMountImage() (*AutoMountImageConfig, error) {
+	return config.AutoMountImage, nil
 }
 
-func rpcSetAutoMountSystemInfo(enabled bool) error {
-	config.AutoMountSystemInfo = enabled
+func rpcSetAutoMountImage(filename string, source string) error {
+	if filename == "" {
+		config.AutoMountImage = nil
+	} else {
+		if source != "kvm" && source != "sd" {
+			return fmt.Errorf("invalid source: %s, must be 'kvm' or 'sd'", source)
+		}
+		config.AutoMountImage = &AutoMountImageConfig{
+			Filename: filename,
+			Source:   source,
+		}
+	}
 	if err := SaveConfig(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
@@ -1640,7 +1818,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getKeyboardLedState":       {Func: rpcGetKeyboardLedState},
 	"absMouseReport":            {Func: rpcAbsMouseReport, Params: []string{"x", "y", "buttons"}},
 	"relMouseReport":            {Func: rpcRelMouseReport, Params: []string{"dx", "dy", "buttons"}},
-	"wheelReport":               {Func: rpcWheelReport, Params: []string{"wheelY"}},
+	"wheelReport":               {Func: rpcWheelReport, Params: []string{"wheelY", "mouseMode"}},
 	"getVideoState":             {Func: rpcGetVideoState},
 	"getUSBState":               {Func: rpcGetUSBState},
 	"reinitializeUsbGadget":     {Func: rpcReinitializeUsbGadget},
@@ -1653,14 +1831,10 @@ var rpcHandlers = map[string]RPCHandler{
 	"sendWOLMagicPacket":        {Func: rpcSendWOLMagicPacket, Params: []string{"macAddress"}},
 	"getStreamQualityFactor":    {Func: rpcGetStreamQualityFactor},
 	"setStreamQualityFactor":    {Func: rpcSetStreamQualityFactor, Params: []string{"factor"}},
-	"getAutoUpdateState":        {Func: rpcGetAutoUpdateState},
-	"setAutoUpdateState":        {Func: rpcSetAutoUpdateState, Params: []string{"enabled"}},
 	"getEDID":                   {Func: rpcGetEDID},
 	"setEDID":                   {Func: rpcSetEDID, Params: []string{"edid"}},
 	"setForceHpd":               {Func: rpcSetForceHpd, Params: []string{"forceHpd"}},
 	"getForceHpd":               {Func: rpcGetForceHpd},
-	"getDevChannelState":        {Func: rpcGetDevChannelState},
-	"setDevChannelState":        {Func: rpcSetDevChannelState, Params: []string{"enabled"}},
 	"getLocalUpdateStatus":      {Func: rpcGetLocalUpdateStatus},
 	"getUpdateStatus":           {Func: rpcGetUpdateStatus},
 	"getSelfSignatureStatus":    {Func: rpcGetSelfSignatureStatus},
@@ -1699,8 +1873,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"mountWithWebRTC":           {Func: rpcMountWithWebRTC, Params: []string{"filename", "size", "mode"}},
 	"mountWithStorage":          {Func: rpcMountWithStorage, Params: []string{"filename", "mode"}},
 	"mountWithSDStorage":        {Func: rpcMountWithSDStorage, Params: []string{"filename", "mode"}},
-	"setAutoMountSystemInfo":    {Func: rpcSetAutoMountSystemInfo, Params: []string{"enabled"}},
-	"getAutoMountSystemInfo":    {Func: rpcGetAutoMountSystemInfo},
+	"setAutoMountImage":         {Func: rpcSetAutoMountImage, Params: []string{"filename", "source"}},
+	"getAutoMountImage":         {Func: rpcGetAutoMountImage},
 	"confirmOtherSession":       {Func: rpcConfirmOtherSession},
 	"listStorageFiles":          {Func: rpcListStorageFiles},
 	"deleteStorageFile":         {Func: rpcDeleteStorageFile, Params: []string{"filename"}},
@@ -1731,6 +1905,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"setActiveExtension":        {Func: rpcSetActiveExtension, Params: []string{"extensionId"}},
 	"getSerialSettings":         {Func: rpcGetSerialSettings},
 	"setSerialSettings":         {Func: rpcSetSerialSettings, Params: []string{"settings"}},
+	"connectSerial":             {Func: rpcConnectSerial},
+	"disconnectSerial":          {Func: rpcDisconnectSerial},
 	"getUsbDevices":             {Func: rpcGetUsbDevices},
 	"setUsbDevices":             {Func: rpcSetUsbDevices, Params: []string{"devices"}},
 	"setUsbDeviceState":         {Func: rpcSetUsbDeviceState, Params: []string{"device", "enabled"}},
@@ -1803,6 +1979,18 @@ var rpcHandlers = map[string]RPCHandler{
 	"getFirewallConfig":         {Func: rpcGetFirewallConfig},
 	"setFirewallConfig":         {Func: rpcSetFirewallConfig, Params: []string{"config"}},
 	"getBootStorageType":        {Func: rpcGetBootStorageType},
-	"getHDMISwitchState":       {Func: rpcGetHDMISwitchState},
-	"setHDMIPort":              {Func: rpcSetHDMIPort, Params: []string{"port"}},
+	"getHDMISwitchState":        {Func: rpcGetHDMISwitchState},
+	"setHDMIPort":               {Func: rpcSetHDMIPort, Params: []string{"port"}},
+	"getLocalPackageInfo":       {Func: rpcGetLocalPackageInfo},
+	"clearLocalPackage":         {Func: rpcClearLocalPackage},
+	"getNetbirdStatus":          {Func: rpcGetNetbirdStatus},
+	"startNetbird":              {Func: rpcStartNetbird},
+	"stopNetbird":               {Func: rpcStopNetbird},
+	"netbirdUp":                 {Func: rpcNetbirdUp, Params: []string{"managementUrl"}},
+	"netbirdDown":               {Func: rpcNetbirdDown},
+	"getNetbirdLog":             {Func: rpcGetNetbirdLog},
+	"getNetbirdVersion":         {Func: rpcGetNetbirdVersion},
+	"getNetbirdUpLog":           {Func: rpcGetNetbirdUpLog},
+	"getNetbirdStatusText":      {Func: rpcGetNetbirdStatusText},
+	"getVpnAutoStartStatus":     {Func: rpcGetVpnAutoStartStatus},
 }

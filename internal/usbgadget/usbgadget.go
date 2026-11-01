@@ -149,3 +149,31 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 
 	return g
 }
+
+// ResetHIDFiles closes all open HID gadget file descriptors.
+// After a UDC rebind, previously open /dev/hidg* handles may point to a stale
+// transport endpoint and must be reopened before use.
+//
+// Backported from upstream jetkvm/kvm commit 15dc380 ("fix: auto-recover USB
+// gadget when host power-cycles (#1297)").
+func (u *UsbGadget) ResetHIDFiles() {
+	u.keyboardLock.Lock()
+	u.closeKeyboardHidFileLocked()
+	u.keyboardLock.Unlock()
+
+	u.absMouseLock.Lock()
+	if u.absMouseHidFile != nil {
+		u.absMouseHidFile.Close()
+		u.absMouseHidFile = nil
+	}
+	u.absMouseLock.Unlock()
+
+	u.relMouseLock.Lock()
+	if u.relMouseHidFile != nil {
+		u.relMouseHidFile.Close()
+		u.relMouseHidFile = nil
+	}
+	u.relMouseLock.Unlock()
+
+	u.log.Info().Msg("all HID file descriptors reset")
+}

@@ -3,9 +3,7 @@ import { Select } from "antd";
 import {useReactAt} from 'i18n-auto-extractor/react'
 import { isMobile } from "react-device-detect";
 
-import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { SettingsPageHeader } from "@components/Settings/SettingsPageheader";
-import notifications from "@/notifications";
 import { useSettingsStore } from "@/hooks/stores";
 import { SettingsItem } from "@components/Settings/SettingsView";
 import enJSON from '@/locales/en.json';
@@ -17,8 +15,6 @@ const { Option } = Select;
 
 
 export default function SettingsGeneral() {
-  const [send] = useJsonRpc();
-  const [autoUpdate, setAutoUpdate] = useState(true);
   const { $at, setCurrentLang } = useReactAt();
 
   // Theme and Language State
@@ -26,13 +22,6 @@ export default function SettingsGeneral() {
   const { setThemeMode } = useTheme();
   const language = useSettingsStore(state => state.language);
   const setLanguage = useSettingsStore(state => state.setLanguage);
-
-  useEffect(() => {
-    send("getAutoUpdateState", {}, resp => {
-      if ("error" in resp) return;
-      setAutoUpdate(resp.result as boolean);
-    });
-  }, [send]);
 
   // Language Change Handler
   const handleLanguageChange = (value: string) => {

@@ -24,17 +24,22 @@ export default function SDFilePage() {
     setLoading(false);
   };
 
-  const handleUnmountSDStorage = async () => {
+  const handleUnmountSDStorage = () => {
     setLoading(true);
-    send("unmountSDStorage", {}, res => {
+    send("unmountSDStorage", {}, async res => {
       if ("error" in res) {
-        notifications.error(`Failed to unmount SD card`);
+        const errorMsg = (res.error.data as string) || res.error.message || "";
+        if (errorMsg.includes("device or resource busy")) {
+          notifications.error("Host has not released the device yet, please safely eject the drive on the host first");
+        } else {
+          notifications.error(`Failed to unmount SD card: ${errorMsg}`);
+        }
         setLoading(false);
         return;
       }
+      await new Promise(r => setTimeout(r, 2000));
+      setLoading(false);
     });
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setLoading(false);
   };
 
   const handleFormatSDStorage = async () => {

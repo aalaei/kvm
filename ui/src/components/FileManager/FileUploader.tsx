@@ -1,6 +1,7 @@
 import { useReactAt } from "i18n-auto-extractor/react";
 import { useEffect, useRef, useState } from "react";
-import { LuCheck, LuUpload } from "react-icons/lu";
+import { LuCheck, LuUpload, LuX } from "react-icons/lu";
+import { Button as AntdButton } from "antd";
 import { isMobile } from "react-device-detect";
 
 import { useJsonRpc } from "@/hooks/useJsonRpc";
@@ -261,6 +262,23 @@ export function FileUploader({
     xhr.send(blob);
   }
 
+  const handleCancelUpload = () => {
+    if (xhrRef.current) {
+      xhrRef.current.abort();
+      xhrRef.current = null;
+    }
+    if (rtcDataChannelRef.current) {
+      rtcDataChannelRef.current.close();
+      rtcDataChannelRef.current = null;
+    }
+    setUploadState("idle");
+    setUploadProgress(0);
+    setUploadSpeed(null);
+    setUploadedFileName(null);
+    setUploadedFileSize(null);
+    onBack();
+  };
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -375,8 +393,8 @@ export function FileUploader({
                     uploadState === "idle",
                 })}
               >
-                <div className="h-[146px] w-full px-4">
-                  <div className="flex h-full flex-col items-center justify-center text-center">
+                <div className="w-full px-4 py-6">
+                  <div className="flex flex-col items-center justify-center text-center">
                     {uploadState === "idle" && (
                       <div className="space-y-1">
                         <div className="inline-block">
@@ -434,11 +452,22 @@ export function FileUploader({
                             </span>
                           </div>
                         </div>
+                        <AntdButton
+                          danger
+                          size="small"
+                          icon={<LuX />}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancelUpload();
+                          }}
+                        >
+                          {$at("Cancel")}
+                        </AntdButton>
                       </div>
                     )}
 
                     {uploadState === "success" && (
-                      <div className="space-y-1">
+                      <div className="space-y-2">
                         <div className="inline-block">
                           <Card>
                             <div className="p-1">
@@ -452,6 +481,19 @@ export function FileUploader({
                         <p className="text-xs leading-none text-slate-700 dark:text-slate-300">
                           {formatters.truncateMiddle(uploadedFileName, 40)} {$at("Uploaded")}
                         </p>
+                        <AntdButton
+                          type="primary"
+                          size="small"
+                          onClick={() => {
+                            setUploadState("idle");
+                            setUploadedFileName(null);
+                            setUploadedFileSize(null);
+                            setUploadProgress(0);
+                            setUploadSpeed(null);
+                          }}
+                        >
+                          {$at("Confirm")}
+                        </AntdButton>
                       </div>
                     )}
                   </div>

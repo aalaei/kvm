@@ -21,7 +21,7 @@ func writeCtrlAction(action string) error {
 
 type VideoInputState struct {
 	Ready          bool    `json:"ready"`
-	Error          string  `json:"error,omitempty"` //no_signal, no_lock, out_of_range
+	Error          string  `json:"error,omitempty"` // no_signal, no_lock, out_of_range
 	Width          int     `json:"width"`
 	Height         int     `json:"height"`
 	FramePerSecond float64 `json:"frame_per_second"`
@@ -34,6 +34,7 @@ func triggerVideoStateUpdate() {
 		writeJSONRPCEvent("videoInputState", lastVideoState, currentSession)
 	}()
 }
+
 func HandleVideoStateMessage(event CtrlResponse) {
 	videoState := VideoInputState{}
 	err := json.Unmarshal(event.Data, &videoState)

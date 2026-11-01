@@ -17,6 +17,7 @@ var appCtx context.Context
 func Main() {
 	SyncConfigSD(true)
 	LoadConfig()
+	cleanupStaleLocalPackageOnStartup()
 
 	if config.APIKey == "" {
 		key, err := generateAPIKey()
@@ -162,11 +163,12 @@ func Main() {
 		if err := initImagesFolder(); err != nil {
 			logger.Warn().Err(err).Msg("failed to init images folder")
 		}
+		remountPersistedVirtualMediaState()
 		initJiggler()
 
 		initSystemInfo()
+		initAutoMountImage()
 	}
-
 	// initialize GPIO
 	initGPIO()
 
@@ -179,28 +181,6 @@ func Main() {
 	// Initialize VPN
 	initVPN()
 
-	//Auto update
-	//go func() {
-	//	time.Sleep(15 * time.Minute)
-	//	for {
-	//		logger.Debug().Bool("auto_update_enabled", config.AutoUpdateEnabled).Msg("UPDATING")
-	//		if !config.AutoUpdateEnabled {
-	//			return
-	//		}
-	//		if currentSession != nil {
-	//			logger.Debug().Msg("skipping update since a session is active")
-	//			time.Sleep(1 * time.Minute)
-	//			continue
-	//		}
-	//		includePreRelease := config.IncludePreRelease
-	//		err = TryUpdate(context.Background(), GetDeviceID(), includePreRelease)
-	//		if err != nil {
-	//			logger.Warn().Err(err).Msg("failed to auto update")
-	//		}
-	//		time.Sleep(1 * time.Hour)
-	//	}
-	//}()
-	//go RunFuseServer()
 	go RunWebServer()
 
 	// API and MCP services temporarily disabled for debugging

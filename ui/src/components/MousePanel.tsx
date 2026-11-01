@@ -28,6 +28,7 @@ const inputModeOptions: Option[] = [
 const othersOptions: Option[] = [
   { label: "Hide Cursor", value: "hide-cursor" },
   { label: "Jiggler", value: "jiggler" },
+  { label: "Invert Scroll", value: "invert-scroll" },
 ];
 
 const MousePanel: React.FC = () => { 
@@ -56,6 +57,19 @@ const MousePanel: React.FC = () => {
     }
   }, [hideCursor]);
 
+  const invertScroll = useSettingsStore(state => state.invertScroll);
+  const setInvertScroll = useSettingsStore(state => state.setInvertScroll);
+  const mouseSensitivity = useSettingsStore(state => state.mouseSensitivity);
+  const setMouseSensitivity = useSettingsStore(state => state.setMouseSensitivity);
+
+  useEffect(() => {
+    if (invertScroll) {
+      setOthers((prevItems: string[]) => [...prevItems, "invert-scroll"]);
+    } else {
+      setOthers((prevItems) => prevItems.filter(item => item !== "invert-scroll"));
+    }
+  }, [invertScroll]);
+
   const handleOtherChange = (data: string[] | string) => {
     console.log(data);
     console.log(data.includes("jiggler"));
@@ -65,6 +79,9 @@ const MousePanel: React.FC = () => {
     }
     if (data.includes("jiggler") != others.includes("jiggler")) {
       handleJigglerChange(data.includes("jiggler"));
+    }
+    if (data.includes("invert-scroll") != others.includes("invert-scroll")) {
+      setInvertScroll(data.includes("invert-scroll"));
     }
   };
 
@@ -156,6 +173,31 @@ const MousePanel: React.FC = () => {
             />
           </div>
 
+          {modeData === "relative" && (
+            <>
+              <DividerLine isMobile={true} />
+              <div className="px-[20px] py-2">
+                <div className="flex justify-between items-center mb-2">
+                  <span className={`text-sm ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                    {$at("Speed Sensitivity")}
+                  </span>
+                  <span className={`text-sm font-medium ${isDark ? 'text-white' : 'text-black'}`}>
+                    {mouseSensitivity.toFixed(1)}x
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="3.0"
+                  step="0.1"
+                  value={mouseSensitivity}
+                  onChange={(e) => setMouseSensitivity(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                />
+              </div>
+            </>
+          )}
+
           <DividerLine isMobile={true} />
 
           {/* Others */}
@@ -194,6 +236,31 @@ const MousePanel: React.FC = () => {
           value={modeData}
           onChange={handleModeChange}
         />
+
+        {modeData === "relative" && (
+          <>
+            <DividerLine />
+            <div className="px-[20px] py-2">
+              <div className="flex justify-between items-center mb-2">
+                <span className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+                  {$at("Speed Sensitivity")}
+                </span>
+                <span className={`text-xs font-medium ${isDark ? 'text-white' : 'text-black'}`}>
+                  {mouseSensitivity.toFixed(1)}x
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="3.0"
+                step="0.1"
+                value={mouseSensitivity}
+                onChange={(e) => setMouseSensitivity(parseFloat(e.target.value))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+              />
+            </div>
+          </>
+        )}
 
         <DividerLine />
         <ScrollThrottlingSelect

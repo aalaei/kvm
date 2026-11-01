@@ -2,6 +2,7 @@ import { ExclamationTriangleIcon } from "@heroicons/react/24/outline";
 import { useMemo, forwardRef, useEffect, useCallback } from "react";
 import {
   LuArrowUpFromLine,
+  LuCheck,
   LuCheckCheck,
   LuLink,
 } from "react-icons/lu";
@@ -90,22 +91,21 @@ const MediaMountedDetails = forwardRef<HTMLDivElement, {
           </div>
         );
       case "Storage":
+      case "SDStorage":
         return (
-          <div className="w-full flex" style={{ justifyContent: "space-between", alignItems: "center" }}>
-
-            <div className="flex" style={{ justifyContent: "space-between", alignItems: "center", width: "70%" }}>
-              <IMGSvg fontSize={23} />
-              <p className="text-sm text-sky-500 dark:text-slate-100">
-                {formatters.truncateMiddle(path, 50)}
+          <div className="w-full flex items-start gap-x-2">
+            <IMGSvg fontSize={23} className="shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0 space-y-0.5">
+              <p className="text-base font-semibold text-black dark:text-white truncate">
+                {formatters.truncateMiddle(filename, 40)}
               </p>
-              <p className="text-sm text-black dark:text-slate-100">
-                {formatters.truncateMiddle(filename, 30)}
+              <p className="text-sm text-slate-500 dark:text-slate-400 truncate">
+                {formatters.truncateMiddle(path, 60)}
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                {formatters.bytes(size ?? 0)}
               </p>
             </div>
-
-            <p className="text-sm text-slate-900 dark:text-slate-100">
-              {formatters.bytes(size ?? 0)}
-            </p>
           </div>
         );
       default:
@@ -117,7 +117,7 @@ const MediaMountedDetails = forwardRef<HTMLDivElement, {
 
     <div className="space-y-4 py-3">
       <h3 className="text-base font-semibold text-black dark:text-white">
-        {$at("Mounted from KVM storage")}
+        {source === "SDStorage" ? $at("Mounted from SD card") : $at("Mounted from KVM storage")}
       </h3>
       <div ref={ref} className="grid h-full grid-rows-(--grid-headerBody)">
         <div className="h-full space-y-4">
@@ -185,6 +185,7 @@ interface UnMountPageProps {
 
 export default function UnMountPage({ unmountedPage }: UnMountPageProps) {
   const diskDataChannelStats = useRTCStore(state => state.diskDataChannelStats);
+  const { $at } = useReactAt();
   const [send] = useJsonRpc();
   const { remoteVirtualMediaState, setRemoteVirtualMediaState } = useMountMediaStore();
   const setUsbEpMode = useUsbEpModeStore(state => state.setUsbEpMode);
@@ -247,10 +248,17 @@ export default function UnMountPage({ unmountedPage }: UnMountPageProps) {
   const handleUnmount = () => {
     send("unmountImage", {}, response => {
       if ("error" in response) {
-        notifications.error(`Failed to unmount image: ${response.error.message}`);
-      } else {
-        syncRemoteVirtualMediaState();
+        const errorMsg = (response.error.data as string) || response.error.message || "";
+        if (errorMsg.includes("device or resource busy")) {
+          notifications.error($at("Host has not released the device yet, please safely eject the drive on the host first"));
+        } else {
+          notifications.error($at("Unmount failed, host has not released the device"));
+        }
+        // Stay on current page, don't navigate away
+        return;
       }
+      // Only sync state on successful unmount
+      syncRemoteVirtualMediaState();
     });
   };
 

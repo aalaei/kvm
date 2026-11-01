@@ -284,6 +284,7 @@ func buildBaseRules(base FirewallBaseRule) error {
 }
 
 func appendDefaultPolicies(base FirewallBaseRule) error {
+
 	inputDefault, err := normalizeFirewallAction(base.InputPolicy)
 	if err != nil {
 		return err
@@ -297,14 +298,23 @@ func appendDefaultPolicies(base FirewallBaseRule) error {
 		return err
 	}
 
-	if err := iptables("filter", "-A", firewallChainInput, "-j", inputDefault); err != nil {
-		return err
+	if inputDefault != "disabled" {
+		if err := iptables("filter", "-A", firewallChainInput, "-j", inputDefault, "-m", "comment", "--comment", "picokvm-firewall-default-policy"); err != nil {
+			return err
+		}
+	} else {
 	}
-	if err := iptables("filter", "-A", firewallChainOutput, "-j", outputDefault); err != nil {
-		return err
+	if outputDefault != "disabled" {
+		if err := iptables("filter", "-A", firewallChainOutput, "-j", outputDefault, "-m", "comment", "--comment", "picokvm-firewall-default-policy"); err != nil {
+			return err
+		}
+	} else {
 	}
-	if err := iptables("filter", "-A", firewallChainForward, "-j", forwardDefault); err != nil {
-		return err
+	if forwardDefault != "disabled" {
+		if err := iptables("filter", "-A", firewallChainForward, "-j", forwardDefault, "-m", "comment", "--comment", "picokvm-firewall-default-policy"); err != nil {
+			return err
+		}
+	} else {
 	}
 
 	return nil
@@ -586,6 +596,8 @@ func normalizeFirewallAction(action string) (string, error) {
 		return "DROP", nil
 	case "reject":
 		return "REJECT", nil
+	case "disabled":
+		return "disabled", nil
 	default:
 		return "", fmt.Errorf("unsupported action %q", action)
 	}
@@ -818,12 +830,47 @@ func ReadFirewallConfigFromSystem() (*FirewallConfig, error) {
 	systemPreroutingRules := parseIptablesSpecLines(systemPreroutingLines)
 	natOutputRules := parseIptablesSpecLines(natOutputLines)
 
-	base := FirewallBaseRule{
-		InputPolicy:   chainDefaultPolicy(inputRules),
-		OutputPolicy:  chainDefaultPolicy(outputRules),
-		ForwardPolicy: chainDefaultPolicy(forwardRules),
+	// Detect if default policies are disabled by checking for our comment
+	inputHasComment := false
+	for _, r := range inputRules {
+		if r.comment == "picokvm-firewall-default-policy" {
+			inputHasComment = true
+			break
+		}
+	}
+	outputHasComment := false
+	for _, r := range outputRules {
+		if r.comment == "picokvm-firewall-default-policy" {
+			outputHasComment = true
+			break
+		}
+	}
+	forwardHasComment := false
+	for _, r := range forwardRules {
+		if r.comment == "picokvm-firewall-default-policy" {
+			forwardHasComment = true
+			break
+		}
 	}
 
+	inputPolicy := chainDefaultPolicy(inputRules)
+	if !inputHasComment {
+		inputPolicy = "disabled"
+	}
+	outputPolicy := chainDefaultPolicy(outputRules)
+	if !outputHasComment {
+		outputPolicy = "disabled"
+	}
+	forwardPolicy := chainDefaultPolicy(forwardRules)
+	if !forwardHasComment {
+		forwardPolicy = "disabled"
+	}
+
+	base := FirewallBaseRule{
+		InputPolicy:   inputPolicy,
+		OutputPolicy:  outputPolicy,
+		ForwardPolicy: forwardPolicy,
+	}
 	inputRules = stripDefaultPolicyRule(inputRules)
 	outputRules = stripDefaultPolicyRule(outputRules)
 	forwardRules = stripDefaultPolicyRule(forwardRules)
@@ -1006,7 +1053,17 @@ func isUnconditionalDefaultRule(r iptablesParsedRule) bool {
 	if r.jump != "ACCEPT" && r.jump != "DROP" && r.jump != "REJECT" {
 		return false
 	}
-	if r.srcIP != "" || r.dstIP != "" || r.proto != "" || r.sport != nil || r.dport != nil {
+	// Check if this is our marked default policy rule
+	if r.comment == "picokvm-firewall-default-policy" {
+		return true
+	}
+	// Check if source or destination are set to specific values (not "any" or "0.0.0.0/0")
+	srcIsAny := r.srcIP == "" || r.srcIP == "0.0.0.0/0"
+	dstIsAny := r.dstIP == "" || r.dstIP == "0.0.0.0/0"
+	if !srcIsAny || !dstIsAny {
+		return false
+	}
+	if r.proto != "" || r.sport != nil || r.dport != nil {
 		return false
 	}
 	if r.inIface != "" || r.outIface != "" || r.ctstate != "" || r.toDest != "" {
@@ -1234,6 +1291,10 @@ func parseCommRulesFromChain(chain string, rules []iptablesParsedRule) []Firewal
 		if isInternalAcceptRule(chain, r) {
 			continue
 		}
+		// Skip unconditional default rules (default policy)
+		if isUnconditionalDefaultRule(r) {
+			continue
+		}
 
 		action := strings.ToLower(r.jump)
 		if action != "accept" && action != "drop" && action != "reject" {
@@ -1277,7 +1338,7 @@ func isInternalAcceptRule(chain string, r iptablesParsedRule) bool {
 	if chain == "output" && r.outIface == "lo" {
 		return true
 	}
-	if strings.Contains(r.ctstate, "ESTABLISHED,RELATED") {
+	if strings.Contains(r.ctstate, "ESTABLISHED") && strings.Contains(r.ctstate, "RELATED") {
 		return true
 	}
 	return false

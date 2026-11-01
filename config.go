@@ -89,59 +89,69 @@ func (m *KeyboardMacro) Validate() error {
 }
 
 type Config struct {
-	STUN                 string                 `json:"stun"`
-	TurnServers          []TurnServer           `json:"turn_servers"`
-	JigglerEnabled       bool                   `json:"jiggler_enabled"`
-	AutoUpdateEnabled    bool                   `json:"auto_update_enabled"`
-	IncludePreRelease    bool                   `json:"include_pre_release"`
-	UpdateDownloadProxy  string                 `json:"update_download_proxy"`
-	HashedPassword       string                 `json:"hashed_password"`
-	LocalAuthToken       string                 `json:"local_auth_token"`
-	LocalAuthMode        string                 `json:"localAuthMode"` //TODO: fix it with migration
-	LocalLoopbackOnly    bool                   `json:"local_loopback_only"`
-	UsbEnhancedDetection bool                   `json:"usb_enhanced_detection"`
-	WakeOnLanDevices     []WakeOnLanDevice      `json:"wake_on_lan_devices"`
-	KeyboardMacros       []KeyboardMacro        `json:"keyboard_macros"`
-	KeyboardLayout       string                 `json:"keyboard_layout"`
-	EdidString           string                 `json:"hdmi_edid_string"`
-	ForceHpd             bool                   `json:"force_hpd"` // 强制输出EDID
-	ActiveExtension      string                 `json:"active_extension"`
-	DisplayRotation      string                 `json:"display_rotation"`
-	DisplayMaxBrightness int                    `json:"display_max_brightness"`
-	DisplayDimAfterSec   int                    `json:"display_dim_after_sec"`
-	DisplayOffAfterSec   int                    `json:"display_off_after_sec"`
-	TLSMode              string                 `json:"tls_mode"` // options: "self-signed", "user-defined", ""
-	UsbConfig            *usbgadget.Config      `json:"usb_config"`
-	UsbDevices           *usbgadget.Devices     `json:"usb_devices"`
-	NetworkConfig        *network.NetworkConfig `json:"network_config"`
-	AppliedNetworkConfig *network.NetworkConfig `json:"applied_network_config,omitempty"`
-	DefaultLogLevel      string                 `json:"default_log_level"`
-	TailScaleAutoStart   bool                   `json:"tailscale_autostart"`
-	TailScaleXEdge       bool                   `json:"tailscale_xedge"`
-	ZeroTierNetworkID    string                 `json:"zerotier_network_id"`
-	ZeroTierAutoStart    bool                   `json:"zerotier_autostart"`
-	FrpcAutoStart        bool                   `json:"frpc_autostart"`
-	FrpcToml             string                 `json:"frpc_toml"`
-	CloudflaredAutoStart bool                   `json:"cloudflared_autostart"`
-	CloudflaredToken     string                 `json:"cloudflared_token"`
-	IO0Status            bool                   `json:"io0_status"`
-	IO1Status            bool                   `json:"io1_status"`
-	AudioMode            string                 `json:"audio_mode"`
-	AudioRateFactor      float64                `json:"audio_rate_factor"`
-	HDMISwitchURL        string                 `json:"hdmi_switch_url"`
-	TimeZone             string                 `json:"time_zone"`
-	LEDGreenMode         string                 `json:"led_green_mode"`
-	LEDYellowMode        string                 `json:"led_yellow_mode"`
-	AutoMountSystemInfo  bool                   `json:"auto_mount_system_info_img"`
-	EasytierAutoStart    bool                   `json:"easytier_autostart"`
-	EasytierConfig       EasytierConfig         `json:"easytier_config"`
-	VntAutoStart         bool                   `json:"vnt_autostart"`
-	VntConfig            VntConfig              `json:"vnt_config"`
-	WireguardAutoStart   bool                   `json:"wireguard_autostart"`
-	WireguardConfig      WireguardConfig        `json:"wireguard_config"`
-	NpuAppEnabled        bool                   `json:"npu_app_enabled"`
-	Firewall             *FirewallConfig        `json:"firewall"`
-	APIKey               string                 `json:"api_key"`
+	STUN                       string                 `json:"stun"`
+	TurnServers                []TurnServer           `json:"turn_servers"`
+	JigglerEnabled             bool                   `json:"jiggler_enabled"`
+	UpdateDownloadProxy        string                 `json:"update_download_proxy"`
+	HashedPassword             string                 `json:"hashed_password"`
+	LocalAuthToken             string                 `json:"local_auth_token"`
+	LocalAuthMode              string                 `json:"localAuthMode"` // TODO: fix it with migration
+	LocalLoopbackOnly          bool                   `json:"local_loopback_only"`
+	UsbEnhancedDetection       bool                   `json:"usb_enhanced_detection"`
+	WakeOnLanDevices           []WakeOnLanDevice      `json:"wake_on_lan_devices"`
+	KeyboardMacros             []KeyboardMacro        `json:"keyboard_macros"`
+	KeyboardLayout             string                 `json:"keyboard_layout"`
+	EdidString                 string                 `json:"hdmi_edid_string"`
+	ForceHpd                   bool                   `json:"force_hpd"`
+	ActiveExtension            string                 `json:"active_extension"`
+	DisplayRotation            string                 `json:"display_rotation"`
+	DisplayMaxBrightness       int                    `json:"display_max_brightness"`
+	DisplayDimAfterSec         int                    `json:"display_dim_after_sec"`
+	DisplayOffAfterSec         int                    `json:"display_off_after_sec"`
+	TLSMode                    string                 `json:"tls_mode"` // options: "self-signed", "user-defined", ""
+	UsbConfig                  *usbgadget.Config      `json:"usb_config"`
+	UsbDevices                 *usbgadget.Devices     `json:"usb_devices"`
+	NetworkConfig              *network.NetworkConfig `json:"network_config"`
+	AppliedNetworkConfig       *network.NetworkConfig `json:"applied_network_config,omitempty"`
+	DefaultLogLevel            string                 `json:"default_log_level"`
+	TailScaleAutoStart         bool                   `json:"tailscale_autostart"`
+	TailScaleXEdge             bool                   `json:"tailscale_xedge"`
+	ZeroTierNetworkID          string                 `json:"zerotier_network_id"`
+	ZeroTierAutoStart          bool                   `json:"zerotier_autostart"`
+	FrpcAutoStart              bool                   `json:"frpc_autostart"`
+	FrpcToml                   string                 `json:"frpc_toml"`
+	CloudflaredAutoStart       bool                   `json:"cloudflared_autostart"`
+	CloudflaredToken           string                 `json:"cloudflared_token"`
+	IO0Status                  bool                   `json:"io0_status"`
+	IO1Status                  bool                   `json:"io1_status"`
+	AudioMode                  string                 `json:"audio_mode"`
+	AudioRateFactor            float64                `json:"audio_rate_factor"`
+	HDMISwitchURL              string                 `json:"hdmi_switch_url"`
+	TimeZone                   string                 `json:"time_zone"`
+	LEDGreenMode               string                 `json:"led_green_mode"`
+	LEDYellowMode              string                 `json:"led_yellow_mode"`
+	AutoMountImage             *AutoMountImageConfig  `json:"auto_mount_image,omitempty"`
+	EasytierAutoStart          bool                   `json:"easytier_autostart"`
+	EasytierConfig             EasytierConfig         `json:"easytier_config"`
+	VntAutoStart               bool                   `json:"vnt_autostart"`
+	VntConfig                  VntConfig              `json:"vnt_config"`
+	WireguardAutoStart         bool                   `json:"wireguard_autostart"`
+	WireguardConfig            WireguardConfig        `json:"wireguard_config"`
+	NetbirdAutoStart           bool                   `json:"netbird_autostart"`
+	NetbirdManagementURL       string                 `json:"netbird_management_url"`
+	NpuAppEnabled              bool                   `json:"npu_app_enabled"`
+	Firewall                   *FirewallConfig        `json:"firewall"`
+	APIKey                     string                 `json:"api_key"`
+	PersistedVirtualMediaState *VirtualMediaState     `json:"persisted_virtual_media_state,omitempty"`
+	SerialBaudRate             int                    `json:"serial_baud_rate,omitempty"`
+	SerialDataBits             int                    `json:"serial_data_bits,omitempty"`
+	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"` // "1", "1.5", "2"
+	SerialParity               string                 `json:"serial_parity,omitempty"`    // "none", "odd", "even", "mark", "space"
+}
+
+type AutoMountImageConfig struct {
+	Filename string `json:"filename"` // e.g. "ubuntu-24.04.iso"
+	Source   string `json:"source"`   // "kvm" or "sd"
 }
 
 type FirewallConfig struct {
@@ -193,8 +203,10 @@ type WireguardConfig struct {
 	ConfigFile  string `json:"config_file"`
 }
 
-const configPath = "/userdata/kvm_config.json"
-const sdConfigPath = "/mnt/sdcard/kvm_config.json"
+const (
+	configPath   = "/userdata/kvm_config.json"
+	sdConfigPath = "/mnt/sdcard/kvm_config.json"
+)
 
 // builtOtaPublicKey is the hex-encoded Ed25519 public key for OTA signature verification,
 // injected via -ldflags at build time. Empty string disables signature verification.
@@ -203,7 +215,6 @@ var builtOtaPublicKey = ""
 var defaultConfig = &Config{
 	STUN:                 "stun:stun.l.google.com:19302",
 	TurnServers:          []TurnServer{},
-	AutoUpdateEnabled:    false, // Set a default value
 	ActiveExtension:      "",
 	KeyboardMacros:       []KeyboardMacro{},
 	DisplayRotation:      "180",
@@ -213,11 +224,11 @@ var defaultConfig = &Config{
 	DisplayDimAfterSec:   120,  // 2 minutes
 	DisplayOffAfterSec:   1800, // 30 minutes
 	TLSMode:              "",
-	ForceHpd:             false, // 默认不强制输出EDID
+	ForceHpd:             false,
 	UsbEnhancedDetection: true,
 	UsbConfig: &usbgadget.Config{
-		VendorId:     "0x1d6b", //The Linux Foundation
-		ProductId:    "0x0104", //Multifunction Composite Gadget
+		VendorId:     "0x1d6b", // The Linux Foundation
+		ProductId:    "0x0104", // Multifunction Composite Gadget
 		SerialNumber: "",
 		Manufacturer: "KVM",
 		Product:      "USB Emulation Device",
@@ -227,7 +238,7 @@ var defaultConfig = &Config{
 		RelativeMouse: true,
 		Keyboard:      true,
 		MassStorage:   true,
-		Audio:         false, //At any given time, only one of Audio and Mtp can be set to true
+		Audio:         false, // At any given time, only one of Audio and Mtp can be set to true
 		Mtp:           false,
 	},
 	NetworkConfig:        &network.NetworkConfig{},
@@ -238,16 +249,16 @@ var defaultConfig = &Config{
 	TailScaleXEdge:       false,
 	FrpcAutoStart:        false,
 	CloudflaredAutoStart: false,
-	IO0Status:           true,
-	IO1Status:           true,
-	AudioMode:           "disabled",
-	AudioRateFactor:     0.9596,
-	HDMISwitchURL:       "http://esp-hdmi-mux.local",
-	LEDGreenMode:        "network-rx",
-	LEDYellowMode:       "kernel-activity",
-	AutoMountSystemInfo: true,
-	WireguardAutoStart:  false,
-	NpuAppEnabled:       false,
+	IO0Status:            true,
+	IO1Status:            true,
+	AudioMode:            "disabled",
+	AudioRateFactor:      0.9596,
+	HDMISwitchURL:        "http://esp-hdmi-mux.local",
+	LEDGreenMode:         "network-rx",
+	LEDYellowMode:        "kernel-activity",
+	AutoMountImage:       &AutoMountImageConfig{Filename: "system_info.img", Source: "kvm"},
+	WireguardAutoStart:   false,
+	NpuAppEnabled:        false,
 	Firewall: &FirewallConfig{
 		Base: FirewallBaseRule{
 			InputPolicy:   "accept",
@@ -407,6 +418,9 @@ func LoadConfig() {
 
 	config = &loadedConfig
 
+	// Load serial port settings from config
+	loadSerialSettingsFromConfig()
+
 	logging.GetRootLogger().UpdateLogLevel(config.DefaultLogLevel)
 
 	logger.Info().Str("path", configPath).Msg("config loaded")
@@ -419,7 +433,7 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
 
@@ -581,7 +595,7 @@ func writeSystemInfoImg() error {
 		}
 	}
 
-	if err := os.MkdirAll(mountPoint, 0755); err != nil {
+	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
 		return fmt.Errorf("mkdir failed: %v", err)
 	}
 

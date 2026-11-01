@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"golang.org/x/crypto/bcrypt"
@@ -166,6 +167,8 @@ func setupRouter() *gin.Engine {
 		protected.PUT("/auth/password-local", handleUpdatePassword)
 		protected.DELETE("/auth/local-password", handleDeletePassword)
 		protected.POST("/storage/upload", handleUploadHttp)
+		protected.POST("/ota/upload", handleOTAUploadHttp)
+		protected.POST("/ota/upload-local-pkg", handleLocalPackageUploadHttp)
 		protected.GET("/storage/download", handleDownloadHttp)
 		protected.GET("/storage/sd-download", handleSDDownloadHttp)
 		protected.POST("/api/rpc", handleRpcRequest)
@@ -240,6 +243,88 @@ func handleWebRTCSession(c *gin.Context) {
 var (
 	pingMessage = []byte("ping")
 	pongMessage = []byte("pong")
+)
+
+// WebsocketPingInterval is the interval at which the websocket client sends ping messages
+const WebsocketPingInterval = 15 * time.Second
+
+var (
+	metricConnectionLastPingTimestamp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kvm_connection_last_ping_timestamp_seconds",
+			Help: "The timestamp when the last ping response was received",
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionLastPingReceivedTimestamp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kvm_connection_last_ping_received_timestamp_seconds",
+			Help: "The timestamp when the last ping request was received",
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionLastPingDuration = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kvm_connection_last_ping_duration_seconds",
+			Help: "The duration of the last ping response",
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionPingDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "kvm_connection_ping_duration_seconds",
+			Help: "The duration of the ping response",
+			Buckets: []float64{
+				0.1, 0.5, 1, 10,
+			},
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionTotalPingSentCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kvm_connection_ping_sent_total",
+			Help: "The total number of pings sent to the connection",
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionTotalPingReceivedCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kvm_connection_ping_received_total",
+			Help: "The total number of pings received from the connection",
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionSessionRequestCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kvm_connection_session_requests_total",
+			Help: "The total number of session requests received",
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionSessionRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "kvm_connection_session_request_duration_seconds",
+			Help: "The duration of session requests",
+			Buckets: []float64{
+				0.1, 0.5, 1, 10,
+			},
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionLastSessionRequestTimestamp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kvm_connection_last_session_request_timestamp_seconds",
+			Help: "The timestamp of the last session request",
+		},
+		[]string{"type", "source"},
+	)
+	metricConnectionLastSessionRequestDuration = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kvm_connection_last_session_request_duration",
+			Help: "The duration of the last session request",
+		},
+		[]string{"type", "source"},
+	)
 )
 
 func handleLocalWebRTCSignal(c *gin.Context) {
@@ -935,6 +1020,11 @@ func handleRpcRequest(c *gin.Context) {
 	httpSessionMu.Unlock()
 
 	if invalid {
+		if isJSONRPCNotification(req) {
+			c.Status(http.StatusNoContent)
+			return
+		}
+
 		response := JSONRPCResponse{
 			JSONRPC: "2.0",
 			Error: map[string]interface{}{
@@ -957,6 +1047,11 @@ func handleRpcRequest(c *gin.Context) {
 	}
 
 	response, _ := DispatchRPCRequest(req)
+
+	if isJSONRPCNotification(req) {
+		c.Status(http.StatusNoContent)
+		return
+	}
 
 	if event != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1025,4 +1120,53 @@ func handleVideoStream(c *gin.Context) {
 			return
 		}
 	}
+}
+
+func handleSessionRequest(
+	ctx context.Context,
+	c *websocket.Conn,
+	req WebRTCSessionRequest,
+	source string,
+	scopedLogger *zerolog.Logger,
+) error {
+	var sourceType = "local"
+
+	timer := prometheus.NewTimer(
+		prometheus.ObserverFunc(func(v float64) {
+			metricConnectionLastSessionRequestDuration.WithLabelValues(sourceType, source).Set(v)
+			metricConnectionSessionRequestDuration.WithLabelValues(sourceType, source).Observe(v)
+		}),
+	)
+	defer timer.ObserveDuration()
+
+	session, err := newSession(SessionConfig{
+		ws:         c,
+		LocalIP:    req.IP,
+		ICEServers: req.ICEServers,
+		Logger:     scopedLogger,
+	})
+	if err != nil {
+		_ = wsjson.Write(context.Background(), c, gin.H{"error": err})
+		return err
+	}
+
+	sd, err := session.ExchangeOffer(req.Sd)
+	if err != nil {
+		_ = wsjson.Write(context.Background(), c, gin.H{"error": err})
+		return err
+	}
+	if currentSession != nil {
+		writeJSONRPCEvent("otherSessionConnected", nil, currentSession)
+		peerConn := currentSession.peerConnection
+		go func() {
+			time.Sleep(1 * time.Second)
+			_ = peerConn.Close()
+		}()
+	}
+
+	logger.Info().Interface("session", session).Msg("new session accepted")
+	logger.Trace().Interface("session", session).Msg("new session accepted")
+	currentSession = session
+	_ = wsjson.Write(context.Background(), c, gin.H{"type": "answer", "data": sd})
+	return nil
 }

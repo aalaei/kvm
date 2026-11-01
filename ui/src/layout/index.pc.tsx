@@ -235,7 +235,7 @@ export default function PCHome() {
     {
       heartbeat: true,
       retryOnError: true,
-      reconnectAttempts: 15,
+      reconnectAttempts: 30,
       reconnectInterval: 1000,
       onReconnectStop: () => {
         console.log("Reconnect stopped");
@@ -533,42 +533,6 @@ export default function PCHome() {
   const setZeroTierNetworkID = useVpnStore(state => state.setZeroTierNetworkID);
   const setZeroTierIP = useVpnStore(state => state.setZeroTierIP);
 
-  const updateVpnStates = () => {
-    // TailScaleState
-    if (tailScaleConnectionState !== "connecting" && tailScaleConnectionState !== "closed") {
-      send("getTailScaleSettings", {}, resp => {
-        if ("error" in resp) return;
-        const result = resp.result as TailScaleResponse;
-        const validState = ["closed", "connecting", "connected", "disconnected", "logined"].includes(result.state)
-          ? result.state as "closed" | "connecting" | "connected" | "disconnected" | "logined"
-          : "closed";
-
-        if(tailScaleConnectionState !== "disconnected" ) {
-          setTailScaleXEdge(result.xEdge);
-        }
-        setTailScaleConnectionState(validState);
-        setTailScaleLoginUrl(result.loginUrl);
-        setTailScaleIP(result.ip);
-      });
-    }
-
-    // ZeroTier
-    if (zeroTierConnectionState !== "connecting" && zeroTierConnectionState !== "closed") {
-      send("getZeroTierSettings", {}, resp => {
-        if ("error" in resp) return;
-        const result = resp.result as ZeroTierResponse;
-        const validState = ["closed", "connecting", "connected", "disconnected", "logined"].includes(result.state)
-          ? result.state as "closed" | "connecting" | "connected" | "disconnected" | "logined"
-          : "closed";
-        setZeroTierConnectionState(validState);
-        setZeroTierNetworkID(result.networkID);
-        setZeroTierIP(result.ip);
-      });
-    }
-  }
-
-  useInterval(updateVpnStates, 5000);
-
   const setNetworkState = useNetworkStateStore(state => state.setNetworkState);
 
   const setUsbState = useHidStore(state => state.setUsbState);
@@ -626,6 +590,51 @@ export default function PCHome() {
 
   const rpcDataChannel = useRTCStore(state => state.rpcDataChannel);
   const [send] = useJsonRpc(onJsonRpcRequest);
+
+  const updateVpnStates = useCallback(() => {
+    // TailScaleState
+    send("getTailScaleSettings", {}, resp => {
+      if ("error" in resp) return;
+      const result = resp.result as TailScaleResponse;
+      const validState = ["closed", "connecting", "connected", "disconnected", "logined"].includes(result.state)
+        ? result.state as "closed" | "connecting" | "connected" | "disconnected" | "logined"
+        : "closed";
+
+      setTailScaleXEdge(result.xEdge);
+      setTailScaleConnectionState(validState);
+      setTailScaleLoginUrl(result.loginUrl);
+      setTailScaleIP(result.ip);
+    });
+
+    // ZeroTier
+    if (zeroTierConnectionState !== "connecting" && zeroTierConnectionState !== "closed") {
+      send("getZeroTierSettings", {}, resp => {
+        if ("error" in resp) return;
+        const result = resp.result as ZeroTierResponse;
+        const validState = ["closed", "connecting", "connected", "disconnected", "logined"].includes(result.state)
+          ? result.state as "closed" | "connecting" | "connected" | "disconnected" | "logined"
+          : "closed";
+        setZeroTierConnectionState(validState);
+        setZeroTierNetworkID(result.networkID);
+        setZeroTierIP(result.ip);
+      });
+    }
+  }, [
+    send,
+    setTailScaleConnectionState,
+    setTailScaleIP,
+    setTailScaleLoginUrl,
+    setTailScaleXEdge,
+    setZeroTierConnectionState,
+    setZeroTierIP,
+    setZeroTierNetworkID,
+    zeroTierConnectionState,
+  ]);
+
+  useEffect(() => {
+    updateVpnStates();
+  }, [updateVpnStates]);
+  useInterval(updateVpnStates, 5000);
 
   const updateUsbState = useCallback(() => {
     send("getUSBState", {}, resp => {

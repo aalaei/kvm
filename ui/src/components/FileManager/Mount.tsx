@@ -855,30 +855,37 @@ function DeviceFileView({
   const handleNextPage = () => {
     setCurrentPage(prev => Math.min(prev + 1, totalPages));
   };
- 
-  const [autoMountSystemInfo, setAutoMountSystemInfo] = useState(false);
-  const handleAutoMountSystemInfoChange = (value: boolean) => {
-    send("setAutoMountSystemInfo", { enabled: value }, response => {
-      if ("error" in response) {
-        notifications.error(`Failed to set auto mount system_info.img: ${response.error.message}`);
-        return;
-      }
-      setAutoMountSystemInfo(value);
-    });
-  }
+
+  const [autoMountImage, setAutoMountImage] = useState<{filename: string, source: string} | null>(null);
 
   useEffect(() => {
-    send("getAutoMountSystemInfo", {}, resp => {
-      if ("error" in resp) {
-        notifications.error(
-          `Failed to load auto mount system_info.img: ${resp.error.data || "Unknown error"}`,
-        );
-        setAutoMountSystemInfo(false);
-      } else {
-        setAutoMountSystemInfo(resp.result as boolean);
+    send("getAutoMountImage", {}, resp => {
+      if (!("error" in resp)) {
+        setAutoMountImage(resp.result as {filename: string, source: string} | null);
       }
     });
-  }, [send, setAutoMountSystemInfo])
+  }, [send]);
+
+  const handleAutoMountChange = (enabled: boolean) => {
+    if (!selected) return;
+    if (enabled) {
+      send("setAutoMountImage", { filename: selected, source: "kvm" }, response => {
+        if ("error" in response) {
+          notifications.error(`Failed to set auto mount: ${response.error.message}`);
+          return;
+        }
+        setAutoMountImage({ filename: selected, source: "kvm" });
+      });
+    } else {
+      send("setAutoMountImage", { filename: "", source: "" }, response => {
+        if ("error" in response) {
+          notifications.error(`Failed to clear auto mount: ${response.error.message}`);
+          return;
+        }
+        setAutoMountImage(null);
+      });
+    }
+  };
 
   return (
     <div className="w-full space-y-4">
@@ -887,24 +894,6 @@ function DeviceFileView({
         description={$at("Select the image you want to mount from the KVM storage")}
       />
 
-      <div
-        className="w-full animate-fadeIn opacity-0"
-        style={{
-          animationDuration: "0.7s",
-          animationDelay: "0.1s",
-        }}
-      >
-        <SettingsItem
-          title={$at("Automatically mount system_info.img")}
-          description={$at("Mount system_info.img automatically when the KVM startup")}
-        >
-          <Checkbox
-            checked={autoMountSystemInfo}
-            onChange={(e) => handleAutoMountSystemInfoChange(e.target.checked)}
-          />
-        </SettingsItem>
-      </div>
-      <hr className="border-slate-800/20 dark:border-slate-300/20" /> 
       <div
         className="w-full animate-fadeIn opacity-0"
         style={{
@@ -945,6 +934,7 @@ function DeviceFileView({
                   uploadedAt={file.createdAt}
                   isIncomplete={file.name.endsWith(".incomplete")}
                   isSelected={selected === file.name}
+                  isAutoMounted={autoMountImage?.filename === file.name && autoMountImage?.source === "kvm"}
                   onDelete={() => {
                     const selectedFile = onStorageFiles.find(f => f.name === file.name);
                     if (!selectedFile) return;
@@ -1004,6 +994,15 @@ function DeviceFileView({
           <Fieldset disabled={selected === null}>
             <UsbModeSelector usbMode={usbMode} setUsbMode={setUsbMode} />
           </Fieldset>
+          {selected && (
+            <label className="flex items-center gap-x-2 cursor-pointer">
+              <Checkbox
+                checked={autoMountImage?.filename === selected && autoMountImage?.source === "kvm"}
+                onChange={(e) => handleAutoMountChange(e.target.checked)}
+              />
+              <span className="text-sm text-slate-700 dark:text-slate-300">Auto Mount</span>
+            </label>
+          )}
           <div className="flex items-center gap-x-2">
             <Button size="MD" theme="blank" text={$at("Back")} onClick={() => onBack()} />
             <Button
@@ -1254,19 +1253,24 @@ function SDFileView({
     syncStorage();
   }
  
-  async function handleUnmountSDStorage() { 
+  async function handleUnmountSDStorage() {
     setLoading(true);
-    send("unmountSDStorage", {}, res => {
+    send("unmountSDStorage", {}, async res => {
       console.log("Unmount SD response:", res);
       if ("error" in res) {
-        notifications.error(`Failed to unmount SD card`);
-        setLoading(false); 
+        const errorMsg = (res.error.data as string) || res.error.message || "";
+        if (errorMsg.includes("device or resource busy")) {
+          notifications.error($at("Host has not released the device yet, please safely eject the drive on the host first"));
+        } else {
+          notifications.error(`Failed to unmount SD card: ${errorMsg}`);
+        }
+        setLoading(false);
         return;
       }
+      await new Promise(r => setTimeout(r, 2000));
+      syncStorage();
+      setLoading(false);
     });
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setLoading(false); 
-    syncStorage();
   }
 
   
@@ -2011,6 +2015,7 @@ export function PreUploadedImageItem({
   uploadedAt,
   isSelected,
   isIncomplete,
+  isAutoMounted,
   onSelect,
   onDelete,
   onContinueUpload,
@@ -2020,6 +2025,7 @@ export function PreUploadedImageItem({
   uploadedAt: string;
   isSelected: boolean;
   isIncomplete: boolean;
+  isAutoMounted?: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onContinueUpload: () => void;
@@ -2047,8 +2053,15 @@ export function PreUploadedImageItem({
     >
       <div className="flex items-center gap-x-4">
         <div className="space-y-0.5 select-none">
-          <div className="text-sm leading-none font-semibold dark:text-white">
-            {formatters.truncateMiddle(name, 45)}
+          <div className="flex items-center gap-x-1.5">
+            <div className="text-sm leading-none font-semibold dark:text-white">
+              {formatters.truncateMiddle(name, 45)}
+            </div>
+            {isAutoMounted && (
+              <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-400 text-black dark:bg-yellow-500 dark:text-white">
+                Auto Mount
+              </span>
+            )}
           </div>
           <div className="flex items-center text-sm">
             <div className="flex items-center gap-x-1 text-slate-600 dark:text-[#ffffff]">

@@ -201,11 +201,6 @@ export default function Clipboard() {
     }
   }, [handleTextSend]);
 
-  useEffect(() => {
-    if (readyToRender && TextAreaRef.current) {
-      TextAreaRef.current.focus();
-    }
-  }, [readyToRender]);
 
   const handleShortcutInput = useCallback(
     (setter: (shortcut: string) => void) => (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -259,11 +254,6 @@ export default function Clipboard() {
 
               <div className="w-full px-1 outline-none"
                    tabIndex={pasteShortcutEnabled ? 0 : -1}
-                   ref={(el) => {
-                     if (el && pasteShortcutEnabled && readyToRender) {
-                       el.focus();
-                     }
-                   }}
                    onKeyUp={e => e.stopPropagation()}
                    onKeyDown={e => {
                      e.stopPropagation();
@@ -283,7 +273,7 @@ export default function Clipboard() {
                        }
                      }
                    }}>
-                {readyToRender && <TextAreaWithLabel
+                {!pasteShortcutEnabled && readyToRender && <TextAreaWithLabel
                   ref={TextAreaRef}
                   label={$at("Copy text from your client to the remote host")}
                   rows={4}
@@ -318,7 +308,7 @@ export default function Clipboard() {
                   }}
                 />}
 
-                {invalidChars.length > 0 && (
+                {!pasteShortcutEnabled && invalidChars.length > 0 && (
                   <div className="mt-2 flex items-center gap-x-2">
                     <ExclamationCircleIcon className="h-4 w-4 text-red-500 dark:text-red-400" />
                     <span className="text-xs text-red-500 dark:text-red-400">
@@ -344,13 +334,12 @@ export default function Clipboard() {
           animationDelay: "0.2s",
         }}
       >
-        <Button
+        {!pasteShortcutEnabled && <Button
           type="primary"
           className="w-full"
           onClick={onConfirmPaste}
         >
-          {$at("Confirm paste")}</Button>
-
+          {$at("Confirm paste")}</Button>}
         <div className="grid grid-cols-[minmax(0,1fr)_140px] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_180px]">
           <Checkbox
             className="min-w-0"

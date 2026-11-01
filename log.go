@@ -14,7 +14,6 @@ var (
 	logger          = logging.GetSubsystemLogger("kvm")
 	networkLogger   = logging.GetSubsystemLogger("network")
 	vpnLogger       = logging.GetSubsystemLogger("vpn")
-	cloudLogger     = logging.GetSubsystemLogger("cloud")
 	websocketLogger = logging.GetSubsystemLogger("websocket")
 	webrtcLogger    = logging.GetSubsystemLogger("webrtc")
 	videoLogger     = logging.GetSubsystemLogger("video")

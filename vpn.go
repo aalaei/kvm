@@ -2,11 +2,15 @@ package kvm
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -16,6 +20,75 @@ type TailScaleSettings struct {
 	LoginUrl string `json:"loginUrl"`
 	IP       string `json:"ip"`
 	XEdge    bool   `json:"xEdge"`
+}
+
+type VpnAutoStartStatus struct {
+	Tool       string `json:"tool"`
+	Status     string `json:"status"` // retrying, failed, succeeded
+	Attempts   int    `json:"attempts"`
+	MaxRetries int    `json:"maxRetries"`
+	LastError  string `json:"lastError"`
+}
+
+var (
+	vpnAutoStartStatusMu  sync.RWMutex
+	vpnAutoStartStatusMap = make(map[string]VpnAutoStartStatus)
+)
+
+func setVpnAutoStartStatus(status VpnAutoStartStatus) {
+	vpnAutoStartStatusMu.Lock()
+	defer vpnAutoStartStatusMu.Unlock()
+	vpnAutoStartStatusMap[status.Tool] = status
+}
+
+func rpcGetVpnAutoStartStatus() map[string]VpnAutoStartStatus {
+	vpnAutoStartStatusMu.RLock()
+	defer vpnAutoStartStatusMu.RUnlock()
+
+	result := make(map[string]VpnAutoStartStatus, len(vpnAutoStartStatusMap))
+	for tool, status := range vpnAutoStartStatusMap {
+		result[tool] = status
+	}
+	return result
+}
+
+func startVpnAutoStartTask(tool string, fn func() error) {
+	const retryDelay = 10 * time.Second
+	const maxAttempts = 3
+
+	go func() {
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			err := fn()
+			if err == nil {
+				setVpnAutoStartStatus(VpnAutoStartStatus{
+					Tool:       tool,
+					Status:     "succeeded",
+					Attempts:   attempt,
+					MaxRetries: maxAttempts - 1,
+				})
+				return
+			}
+
+			status := VpnAutoStartStatus{
+				Tool:       tool,
+				Status:     "failed",
+				Attempts:   attempt,
+				MaxRetries: maxAttempts - 1,
+				LastError:  err.Error(),
+			}
+
+			if attempt < maxAttempts {
+				status.Status = "retrying"
+				setVpnAutoStartStatus(status)
+				vpnLogger.Error().Err(err).Str("tool", tool).Int("attempt", attempt).Dur("retry_after", retryDelay).Msg("VPN auto start failed, retry scheduled")
+				time.Sleep(retryDelay)
+				continue
+			}
+
+			setVpnAutoStartStatus(status)
+			vpnLogger.Error().Err(err).Str("tool", tool).Int("attempt", attempt).Msg("VPN auto start failed after retries")
+		}
+	}()
 }
 
 func rpcCancelTailScale() error {
@@ -898,9 +971,10 @@ func initVPN() {
 		}
 
 		if config.TailScaleAutoStart {
-			if _, err := rpcLoginTailScale(config.TailScaleXEdge); err != nil {
-				vpnLogger.Error().Err(err).Msg("Failed to auto start TailScale")
-			}
+			startVpnAutoStartTask("tailscale", func() error {
+				_, err := rpcLoginTailScale(config.TailScaleXEdge)
+				return err
+			})
 		}
 
 		if config.ZeroTierAutoStart && config.ZeroTierNetworkID != "" {
@@ -944,6 +1018,15 @@ func initVPN() {
 				vpnLogger.Error().Err(err).Msg("Failed to auto start wireguard")
 			}
 		}
+
+		if config.NetbirdAutoStart && config.NetbirdManagementURL != "" {
+			if err := rpcStartNetbird(); err != nil {
+				vpnLogger.Error().Err(err).Msg("Failed to auto start netbird")
+			}
+			if _, err := rpcNetbirdUp(config.NetbirdManagementURL); err != nil {
+				vpnLogger.Error().Err(err).Msg("Failed to auto connect netbird")
+			}
+		}
 	}()
 
 	go func() {
@@ -956,4 +1039,450 @@ func initVPN() {
 			}
 		}
 	}()
+}
+
+// Netbird support
+type NetbirdStatus struct {
+	Running       bool   `json:"running"`
+	Connected     bool   `json:"connected"`
+	State         string `json:"state"` // down, starting, needs_auth, connected_no_port, connected, unknown
+	IP            string `json:"ip"`
+	FQDN          string `json:"fqdn"`
+	SSOLoginURL   string `json:"ssoLoginUrl"`
+	Version       string `json:"version"`
+	ManagementURL string `json:"managementUrl"`
+	UnknownReason string `json:"unknownReason"`
+	StatusOutput  string `json:"statusOutput"`
+}
+
+var (
+	netbirdLogPath    = "/tmp/netbird.log"
+	netbirdUpLogPath  = "/tmp/netbird-up.log"
+	netbirdCmdLock    sync.Mutex
+	netbirdUpCancel   context.CancelFunc
+	netbirdSSOURLExpr = regexp.MustCompile(`https://\S+user_code=\S+`)
+)
+
+func netbirdRunning() bool {
+	cmd := exec.Command("pgrep", "-x", "netbird")
+	return cmd.Run() == nil
+}
+
+func extractNetbirdSSOLoginURL(line string) string {
+	match := netbirdSSOURLExpr.FindString(line)
+	if match == "" {
+		return ""
+	}
+	return strings.Trim(match, "`'\"")
+}
+
+func sanitizeNetbirdManagementURL(url string) string {
+	url = strings.TrimSpace(url)
+	url = strings.Trim(url, "`'\"")
+	return strings.TrimSpace(url)
+}
+
+func getNetbirdSSOLoginURL() (string, error) {
+	f, err := os.Open(netbirdUpLogPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var ssoLoginURL string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if url := extractNetbirdSSOLoginURL(sc.Text()); url != "" {
+			ssoLoginURL = url
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+	return ssoLoginURL, nil
+}
+
+func clearNetbirdUpState() {
+	if netbirdUpCancel != nil {
+		netbirdUpCancel()
+		netbirdUpCancel = nil
+	}
+	_ = os.Remove(netbirdUpLogPath)
+}
+
+// parseNetbirdStatus parses the output of netbird status and returns the state.
+func parseNetbirdStatus(output string) (string, bool, string, string, string) {
+	// state: down, disconnected, needs_auth, connected_no_port, connected, unknown
+	// connected, ip, fqdn, unknown reason
+
+	lines := strings.Split(output, "\n")
+
+	// Check for daemon starting / unavailable state.
+	for _, line := range lines {
+		if strings.Contains(line, "/var/run/netbird.sock") ||
+			strings.Contains(line, "failed to connect to daemon") ||
+			strings.Contains(line, "context deadline exceeded") {
+			return "starting", false, "", "", ""
+		}
+	}
+
+	// Check for down state (NeedsLogin or LoginFailed)
+	for _, line := range lines {
+		if strings.Contains(line, "Daemon status: NeedsLogin") || strings.Contains(line, "Daemon status: LoginFailed") {
+			return "down", false, "", "", ""
+		}
+	}
+
+	// Check for disconnected state (PermissionDenied)
+	for _, line := range lines {
+		if strings.Contains(line, "PermissionDenied") || strings.Contains(line, "no peer auth method provided") {
+			return "disconnected", false, "", "", ""
+		}
+	}
+
+	// Parse Management and Signal status
+	managementConnected := false
+	signalConnected := false
+	var ip, fqdn string
+	wireguardPort := "N/A"
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Management:") {
+			if strings.Contains(line, "Connected") {
+				managementConnected = true
+			}
+		} else if strings.HasPrefix(line, "Signal:") {
+			if strings.Contains(line, "Connected") {
+				signalConnected = true
+			}
+		} else if strings.HasPrefix(line, "NetBird IP:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				ip = strings.TrimSpace(parts[1])
+			}
+		} else if strings.HasPrefix(line, "FQDN:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				fqdn = strings.TrimSpace(parts[1])
+			}
+		} else if strings.HasPrefix(line, "Wireguard port:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				wireguardPort = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+
+	// Determine state
+	if managementConnected && signalConnected {
+		if wireguardPort != "N/A" && wireguardPort != "" {
+			return "connected", true, ip, fqdn, ""
+		}
+		return "connected_no_port", true, ip, fqdn, ""
+	}
+
+	// Check for disconnected state (Management and Signal both Disconnected)
+	managementDisconnected := false
+	signalDisconnected := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Management:") && strings.Contains(line, "Disconnected") {
+			managementDisconnected = true
+		} else if strings.HasPrefix(line, "Signal:") && strings.Contains(line, "Disconnected") {
+			signalDisconnected = true
+		}
+	}
+	if managementDisconnected && signalDisconnected {
+		return "disconnected", false, "", "", ""
+	}
+
+	// Treat partial Management/Signal transitions as starting.
+	if managementConnected || signalConnected || managementDisconnected || signalDisconnected {
+		return "starting", false, "", "", ""
+	}
+
+	nonEmptyLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			nonEmptyLines = append(nonEmptyLines, line)
+		}
+	}
+
+	unknownReason := fmt.Sprintf(
+		"Unknown parse result: management_connected=%t, signal_connected=%t, management_disconnected=%t, signal_disconnected=%t, wireguard_port=%q, non_empty_lines=%d",
+		managementConnected,
+		signalConnected,
+		managementDisconnected,
+		signalDisconnected,
+		wireguardPort,
+		len(nonEmptyLines),
+	)
+	return "unknown", false, "", "", unknownReason
+}
+
+func rpcGetNetbirdVersion() (string, error) {
+	cmd := exec.Command("netbird", "version")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get netbird version: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func rpcInstallNetbird() error {
+	cmd := exec.Command("netbird", "service", "install")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "Init already exists") {
+			vpnLogger.Info().Msg("Netbird service already installed")
+			return nil
+		}
+		return fmt.Errorf("failed to install netbird service: %w", err)
+	}
+	vpnLogger.Info().Msg("Netbird service installed")
+	return nil
+}
+
+func rpcStartNetbird() error {
+	rpcInstallNetbird()
+
+	cmd := exec.Command("netbird", "service", "start")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Some environments return a non-zero exit even though the daemon is already running.
+		if netbirdRunning() {
+			vpnLogger.Warn().Err(err).Str("output", string(output)).Msg("Netbird start returned non-zero exit but daemon is running")
+		} else {
+			return fmt.Errorf("failed to start netbird service: %w, output: %s", err, string(output))
+		}
+	}
+	if !netbirdRunning() {
+		return fmt.Errorf("failed to start netbird service: %w, output: %s", err, string(output))
+	}
+	vpnLogger.Info().Msg("Netbird service started")
+	config.NetbirdAutoStart = true
+	if err := SaveConfig(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	return nil
+}
+
+func rpcStopNetbird() error {
+	netbirdCmdLock.Lock()
+	defer netbirdCmdLock.Unlock()
+
+	clearNetbirdUpState()
+
+	cmd := exec.Command("netbird", "service", "stop")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to stop netbird service: %w, output: %s", err, string(output))
+	}
+	vpnLogger.Info().Msg("Netbird service stopped")
+	config.NetbirdAutoStart = false
+	if err := SaveConfig(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	return nil
+}
+
+func rpcGetNetbirdStatus() (NetbirdStatus, error) {
+	netbirdCmdLock.Lock()
+	defer netbirdCmdLock.Unlock()
+
+	status := NetbirdStatus{
+		Running:       netbirdRunning(),
+		ManagementURL: sanitizeNetbirdManagementURL(config.NetbirdManagementURL),
+	}
+
+	if !status.Running {
+		status.State = "down"
+		return status, nil
+	}
+
+	cmd := exec.Command("netbird", "status")
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	// Parse output even on error (netbird returns non-zero for NeedsLogin/PermissionDenied)
+	status.Running = true
+	state, connected, ip, fqdn, unknownReason := parseNetbirdStatus(outputStr)
+	status.State = state
+	status.Connected = connected
+	status.IP = ip
+	status.FQDN = fqdn
+	status.UnknownReason = unknownReason
+	status.StatusOutput = strings.TrimSpace(outputStr)
+
+	if err != nil && state == "unknown" {
+		status.State = "unknown"
+		if status.UnknownReason == "" {
+			status.UnknownReason = "netbird status returned an error and did not match any known parser branch"
+		}
+	}
+
+	if !status.Connected {
+		ssoLoginURL, ssoErr := getNetbirdSSOLoginURL()
+		if ssoErr == nil && ssoLoginURL != "" {
+			status.State = "needs_auth"
+			status.SSOLoginURL = ssoLoginURL
+		}
+	}
+
+	version, err := rpcGetNetbirdVersion()
+	if err == nil {
+		status.Version = version
+	}
+
+	return status, nil
+}
+func rpcGetNetbirdLog() (string, error) {
+	f, err := os.Open(netbirdLogPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("netbird log file not exist")
+		}
+		return "", err
+	}
+	defer f.Close()
+
+	const want = 30
+	lines := make([]string, 0, want+10)
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+		if len(lines) > want {
+			lines = lines[1:]
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+
+	var buf []byte
+	for _, l := range lines {
+		buf = append(buf, l...)
+		buf = append(buf, '\n')
+	}
+	return string(buf), nil
+}
+
+func rpcNetbirdUp(managementURL string) (NetbirdStatus, error) {
+	netbirdCmdLock.Lock()
+	defer netbirdCmdLock.Unlock()
+
+	status := NetbirdStatus{
+		Running: true,
+	}
+
+	managementURL = sanitizeNetbirdManagementURL(managementURL)
+	if managementURL == "" {
+		return status, fmt.Errorf("management URL is empty")
+	}
+
+	clearNetbirdUpState()
+
+	// Redirect output to log file
+	logFile, err := os.OpenFile(netbirdUpLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return status, fmt.Errorf("failed to open log file: %w", err)
+	}
+	// Don't close logFile here - let the goroutine close it when process exits
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	netbirdUpCancel = cancel
+
+	// Start netbird up in background (non-blocking)
+	cmd := exec.CommandContext(ctx, "netbird", "up", "--management-url", managementURL)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		cancel()
+		return status, fmt.Errorf("failed to start netbird up: %w", err)
+	}
+
+	// Clean up when process exits
+	go func() {
+		_ = cmd.Wait()
+		logFile.Close()
+		cancel()
+	}()
+
+	vpnLogger.Info().Str("management_url", managementURL).Msg("Netbird up started in background")
+	config.NetbirdManagementURL = managementURL
+	if err := SaveConfig(); err != nil {
+		return status, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	return status, nil
+}
+func rpcGetNetbirdUpLog() (NetbirdStatus, error) {
+	status := NetbirdStatus{
+		Running:       netbirdRunning(),
+		ManagementURL: sanitizeNetbirdManagementURL(config.NetbirdManagementURL),
+	}
+
+	ssoLoginURL, err := getNetbirdSSOLoginURL()
+	if err != nil && !os.IsNotExist(err) {
+		return status, err
+	}
+	if ssoLoginURL != "" {
+		status.SSOLoginURL = ssoLoginURL
+		status.State = "needs_auth"
+	}
+
+	// Check if netbird is connected
+	if status.Running {
+		netbirdStatus, _ := rpcGetNetbirdStatus()
+		status.Running = netbirdStatus.Running
+		status.State = netbirdStatus.State
+		status.Connected = netbirdStatus.Connected
+		status.IP = netbirdStatus.IP
+		status.FQDN = netbirdStatus.FQDN
+		status.Version = netbirdStatus.Version
+		if status.SSOLoginURL == "" {
+			status.SSOLoginURL = netbirdStatus.SSOLoginURL
+		}
+		if status.SSOLoginURL != "" && !status.Connected {
+			status.State = "needs_auth"
+		}
+
+		// Enable autostart when connected
+		if netbirdStatus.Connected && !config.NetbirdAutoStart {
+			config.NetbirdAutoStart = true
+			if err := SaveConfig(); err != nil {
+				vpnLogger.Error().Err(err).Msg("Failed to save config after netbird connected")
+			}
+		}
+	}
+
+	return status, nil
+}
+func rpcNetbirdDown() error {
+	netbirdCmdLock.Lock()
+	defer netbirdCmdLock.Unlock()
+
+	clearNetbirdUpState()
+
+	cmd := exec.Command("netbird", "down")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to disconnect netbird: %w, output: %s", err, string(output))
+	}
+	vpnLogger.Info().Msg("Netbird disconnected")
+	return nil
+}
+
+func rpcGetNetbirdStatusText() (string, error) {
+	cmd := exec.Command("netbird", "status", "-d")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("failed to get netbird status: %w", err)
+	}
+	return string(output), nil
 }

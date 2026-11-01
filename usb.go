@@ -3,6 +3,7 @@ package kvm
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,10 +77,6 @@ func initUsbGadget() {
 }
 
 func initSystemInfo() {
-	if !config.AutoMountSystemInfo {
-		return
-	}
-
 	go func() {
 		for {
 			if !networkState.HasIPAssigned() {
@@ -94,19 +91,75 @@ func initSystemInfo() {
 		if err != nil {
 			usbLogger.Error().Err(err).Msg("failed to create system_info.img")
 		}
-
-		mediaState, _ := rpcGetVirtualMediaState()
-		if mediaState != nil && mediaState.Filename == "system_info.img" {
-			usbLogger.Error().Err(err).Msg("system_info.img is busy")
-		} else if mediaState == nil || mediaState.Filename == "" {
-			err = rpcMountWithStorage("system_info.img", Disk)
-			if err != nil {
-				usbLogger.Error().Err(err).Msg("failed to mount system_info.img")
-			}
-		}
 	}()
 }
 
+func initAutoMountImage() {
+	if config.AutoMountImage == nil || config.AutoMountImage.Filename == "" {
+		return
+	}
+
+	go func() {
+		// Wait for network to be ready (max 30s)
+		for i := 0; i < 10; i++ {
+			if !networkState.HasIPAssigned() {
+				vpnLogger.Warn().Msg("waiting for network for auto-mount, will retry in 3 seconds")
+				time.Sleep(3 * time.Second)
+				continue
+			}
+			break
+		}
+
+		// If source is SD, wait for SD card to be available (max 30s)
+		if config.AutoMountImage.Source == "sd" {
+			sdReady := false
+			for i := 0; i < 10; i++ {
+				sdStatus, err := rpcGetSDMountStatus()
+				if err == nil && sdStatus.Status == SDMountOK {
+					sdReady = true
+					break
+				}
+				usbLogger.Warn().Int("attempt", i+1).Msg("waiting for SD card for auto-mount")
+				time.Sleep(3 * time.Second)
+			}
+			if !sdReady {
+				usbLogger.Warn().Msg("SD card not available for auto-mount after 30s, skipping")
+				return
+			}
+		}
+
+		// Check if there's already a mounted image
+		mediaState, _ := rpcGetVirtualMediaState()
+		if mediaState != nil && mediaState.Filename != "" {
+			usbLogger.Info().Msgf("auto-mount skipped: %s is already mounted", mediaState.Filename)
+			return
+		}
+
+		// Determine mode from file extension
+		mode := Disk
+		if strings.HasSuffix(strings.ToLower(config.AutoMountImage.Filename), ".iso") {
+			mode = CDROM
+		}
+
+		var err error
+		if config.AutoMountImage.Source == "sd" {
+			err = rpcMountWithSDStorage(config.AutoMountImage.Filename, mode)
+		} else {
+			err = rpcMountWithStorage(config.AutoMountImage.Filename, mode)
+		}
+		if err != nil {
+			usbLogger.Error().Err(err).Msgf("failed to auto-mount %s", config.AutoMountImage.Filename)
+			// Clear auto-mount config if file not found
+			if strings.Contains(err.Error(), "file does not exist") || strings.Contains(err.Error(), "no such file") {
+				usbLogger.Warn().Msg("auto-mount image not found, clearing auto-mount config")
+				config.AutoMountImage = nil
+				SaveConfig()
+			}
+		} else {
+			usbLogger.Info().Msgf("auto-mounted %s as %s from %s", config.AutoMountImage.Filename, mode, config.AutoMountImage.Source)
+		}
+	}()
+}
 func rpcKeyboardReport(modifier uint8, keys []uint8) error {
 	return gadget.KeyboardReport(modifier, keys)
 }
@@ -124,10 +177,13 @@ func rpcAbsMouseReport(x, y int, buttons uint8) error {
 }
 
 func rpcRelMouseReport(dx, dy int8, buttons uint8) error {
-	return gadget.RelMouseReport(dx, dy, buttons)
+	return gadget.RelMouseReport(dx, dy, buttons, 0)
 }
 
-func rpcWheelReport(wheelY int8) error {
+func rpcWheelReport(wheelY int8, mouseMode string) error {
+	if mouseMode == "relative" {
+		return gadget.RelMouseReport(0, 0, 0, wheelY)
+	}
 	return gadget.AbsMouseWheelReport(wheelY)
 }
 
@@ -202,6 +258,10 @@ func rpcReinitializeUsbGadget() error {
 		}
 	}
 
+	// Close stale HID file descriptors before recreating the gadget.
+	// Backported from upstream jetkvm/kvm commit 15dc380.
+	gadget.ResetHIDFiles()
+
 	// Recreate the gadget instance similar to program restart
 	gadget = usbgadget.NewUsbGadget(
 		"kvm",
@@ -246,6 +306,7 @@ func rpcReinitializeUsbGadget() error {
 	triggerUSBStateUpdate()
 
 	initSystemInfo()
+	initAutoMountImage()
 
 	usbLogger.Info().Msg("USB gadget reinitialized successfully")
 	return nil
@@ -267,6 +328,10 @@ func rpcReinitializeUsbGadgetSoft() error {
 			usbLogger.Warn().Err(err).Msg("failed to unmount virtual media before USB soft reinit")
 		}
 	}
+
+	// Close stale HID file descriptors before rebinding USB.
+	// Backported from upstream jetkvm/kvm commit 15dc380.
+	gadget.ResetHIDFiles()
 
 	// Update gadget configuration (will rebind USB inside)
 	if err := gadget.UpdateGadgetConfig(); err != nil {

@@ -32,18 +32,18 @@ func reopenSerialPort() error {
 		port = nil
 	}
 	var err error
-	port, err = serial.Open(serialPortPath, defaultMode)
+	port, err = serial.Open(serialPortPath, serialPortMode)
 	if err != nil {
 		serialLogger.Error().
 			Err(err).
 			Str("path", serialPortPath).
-			Interface("mode", defaultMode).
+			Interface("mode", serialPortMode).
 			Msg("Error opening serial port")
 		return err
 	}
 	serialLogger.Info().
 		Str("path", serialPortPath).
-		Interface("mode", defaultMode).
+		Interface("mode", serialPortMode).
 		Msg("Serial port opened successfully")
 	return nil
 }
