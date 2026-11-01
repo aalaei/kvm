@@ -5,6 +5,7 @@ import MouseSVG from "@assets/second/mouse.svg?react";
 import VideoSVG from "@assets/second/vedio.svg?react";
 import MediaSVG from "@assets/second/media.svg?react";
 import { LuMonitorPlay } from "react-icons/lu";
+import { useHdmiSwitchConfigured } from "@components/extensions/HdmiSwitch";
 import HdmlSVG from "@assets/second/hdml.svg?react";
 import Hdml2SVG from "@assets/second/hdml2.svg?react";
 import UsbSVG from "@assets/second/usb.svg?react";
@@ -42,6 +43,7 @@ const { Text } = Typography;
 
 export default function BottomBarPC() {
   const { $at } = useReactAt();
+  const hdmiSwitchConfigured = useHdmiSwitchConfigured();
   const {  isDark } = useThemeSettings();
   const activeKeys = useHidStore(state => state.activeKeys);
   const activeModifiers = useHidStore(state => state.activeModifiers);
@@ -226,6 +228,7 @@ export default function BottomBarPC() {
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
 
+          {hdmiSwitchConfigured && (<>
           <AntdButton
             type={"text"}
             size={"small"}
@@ -241,6 +244,7 @@ export default function BottomBarPC() {
           </AntdButton>
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
+          </>)}
           <AntdButton
             type={"text"}
             size={"small"}

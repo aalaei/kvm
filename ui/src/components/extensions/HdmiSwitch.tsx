@@ -13,6 +13,7 @@ interface HDMISwitchState {
   currentPort: number;
   portNames: string[];
   available: boolean;
+  configured?: boolean;
   lastError?: string;
 }
 
@@ -24,7 +25,32 @@ interface HDMISwitchConfig {
   clearPassword?: boolean;
 }
 
-function HdmiSwitchSettings({ onClose }: { onClose: () => void }) {
+const CONFIG_CHANGED_EVENT = "hdmi-switch-config-changed";
+
+/** Whether an HDMI switch address is configured (the integration is opt-in). */
+export function useHdmiSwitchConfigured() {
+  const [send] = useJsonRpc();
+  const [configured, setConfigured] = useState(false);
+
+  useEffect(() => {
+    const refresh = () =>
+      send("getHDMISwitchConfig", {}, resp => {
+        if ("error" in resp) return;
+        setConfigured(!!(resp.result as HDMISwitchConfig).url?.trim());
+      });
+    refresh();
+    window.addEventListener(CONFIG_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(CONFIG_CHANGED_EVENT, refresh);
+  }, [send]);
+
+  return configured;
+}
+
+/**
+ * Address / credentials form. With onClose it renders as a panel with a
+ * Cancel button; without it, it is embedded (Settings → Hardware).
+ */
+export function HdmiSwitchSettings({ onClose }: { onClose?: () => void }) {
   const [send] = useJsonRpc();
   const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
@@ -78,8 +104,13 @@ function HdmiSwitchSettings({ onClose }: { onClose: () => void }) {
         notifications.error(`Failed to save HDMI switch settings: ${resp.error.data || "Unknown error"}`);
         return;
       }
-      notifications.success("HDMI switch settings saved");
-      onClose();
+      notifications.success(url.trim() ? "HDMI switch settings saved" : "HDMI switch disabled");
+      setPassword("");
+      if (!clearPassword && password) setHasPassword(true);
+      if (clearPassword || !username) setHasPassword(false);
+      setClearPassword(false);
+      window.dispatchEvent(new Event(CONFIG_CHANGED_EVENT));
+      onClose?.();
     });
   };
 
@@ -89,10 +120,9 @@ function HdmiSwitchSettings({ onClose }: { onClose: () => void }) {
       ? "Saved — leave empty to keep"
       : "";
 
-  return (
-    <Card className="animate-fadeIn opacity-0">
+  const form = (
       <form
-        className="space-y-3 p-3"
+        className={cx("space-y-3", { "p-3": !!onClose })}
         onSubmit={e => {
           e.preventDefault();
           handleSave();
@@ -101,7 +131,7 @@ function HdmiSwitchSettings({ onClose }: { onClose: () => void }) {
         <InputFieldWithLabel
           size="SM"
           label="Address"
-          description="Hostname, mDNS name, IP, or full URL (e.g. esp-hdmi-mux.local, 192.0.2.10, http://host:8080)"
+          description="Hostname, mDNS name, IP, or full URL of an ESPHome HDMI switch (e.g. esp-hdmi-mux.local, 192.0.2.10, http://host:8080). Leave empty to disable."
           placeholder="esp-hdmi-mux.local"
           value={url}
           disabled={!loaded}
@@ -152,7 +182,7 @@ function HdmiSwitchSettings({ onClose }: { onClose: () => void }) {
         )}
 
         <div className="flex flex-wrap justify-end gap-2">
-          <Button size="SM" theme="light" text="Cancel" type="button" onClick={onClose} />
+          {onClose && <Button size="SM" theme="light" text="Cancel" type="button" onClick={onClose} />}
           <Button
             size="SM"
             theme="light"
@@ -170,8 +200,9 @@ function HdmiSwitchSettings({ onClose }: { onClose: () => void }) {
           />
         </div>
       </form>
-    </Card>
   );
+
+  return onClose ? <Card className="animate-fadeIn opacity-0">{form}</Card> : form;
 }
 
 export function HdmiSwitch() {
@@ -237,7 +268,13 @@ export function HdmiSwitch() {
         />
       )}
 
-      {!state.available && (
+      {state.configured === false && !showSettings && (
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          No HDMI switch configured. Use Configure, or Settings → Hardware → HDMI Switch.
+        </p>
+      )}
+
+      {state.configured !== false && !state.available && (
         <p className="text-sm text-amber-500 dark:text-amber-400">
           Switch offline — retrying…
           {state.lastError && (

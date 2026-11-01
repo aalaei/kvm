@@ -255,7 +255,6 @@ var defaultConfig = &Config{
 	IO1Status:            true,
 	AudioMode:            "disabled",
 	AudioRateFactor:      0.9596,
-	HDMISwitchURL:        "http://esp-hdmi-mux.local",
 	LEDGreenMode:         "network-rx",
 	LEDYellowMode:        "kernel-activity",
 	AutoMountImage:       &AutoMountImageConfig{Filename: "system_info.img", Source: "kvm"},

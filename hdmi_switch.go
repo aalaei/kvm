@@ -15,11 +15,12 @@ import (
 	"time"
 )
 
-const defaultHDMISwitchURL = "http://esp-hdmi-mux.local"
+// The HDMI switch integration is opt-in: nothing runs until an address is
+// configured (Settings → Hardware → HDMI Switch).
 
 // hdmiSwitchBaseURL returns the configured switch address as a URL without a
-// trailing slash. The setting may be a bare hostname / mDNS name / IP
-// (optionally with :port) or a full http(s) URL.
+// trailing slash, or "" when no switch is configured. The setting may be a
+// bare hostname / mDNS name / IP (optionally with :port) or a full http(s) URL.
 func hdmiSwitchBaseURL() string {
 	raw := ""
 	if config != nil {
@@ -31,7 +32,7 @@ func hdmiSwitchBaseURL() string {
 func normalizeHDMISwitchURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return defaultHDMISwitchURL
+		return ""
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "http://" + raw
@@ -40,6 +41,9 @@ func normalizeHDMISwitchURL(raw string) string {
 }
 
 func validateHDMISwitchURL(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil // empty disables the integration
+	}
 	u, err := url.Parse(normalizeHDMISwitchURL(raw))
 	if err != nil {
 		return "", fmt.Errorf("invalid address: %w", err)
@@ -129,6 +133,7 @@ type HDMISwitchState struct {
 	CurrentPort int      `json:"currentPort"` // 1-5, 0 = unknown
 	PortNames   []string `json:"portNames"`   // index 0 = port 1, len=5
 	Available   bool     `json:"available"`
+	Configured  bool     `json:"configured"`
 	LastError   string   `json:"lastError,omitempty"`
 }
 
@@ -163,6 +168,15 @@ func setHDMISwitchUnavailable(err error) {
 
 func runHDMISwitchMonitor() {
 	for {
+		if hdmiSwitchBaseURL() == "" {
+			hdmiSwitchStateLock.Lock()
+			hdmiSwitchState.Available = false
+			hdmiSwitchState.LastError = ""
+			hdmiSwitchStateLock.Unlock()
+			<-hdmiSwitchWake // idle until configured
+			continue
+		}
+
 		ctx, cancel := context.WithCancel(context.Background())
 		hdmiSwitchCancelLock.Lock()
 		hdmiSwitchCancel = cancel
@@ -293,6 +307,7 @@ func rpcGetHDMISwitchState() (HDMISwitchState, error) {
 		CurrentPort: hdmiSwitchState.CurrentPort,
 		PortNames:   names,
 		Available:   hdmiSwitchState.Available,
+		Configured:  hdmiSwitchBaseURL() != "",
 		LastError:   hdmiSwitchState.LastError,
 	}, nil
 }
@@ -300,6 +315,9 @@ func rpcGetHDMISwitchState() (HDMISwitchState, error) {
 func rpcSetHDMIPort(port int) error {
 	if port < 1 || port > 5 {
 		return fmt.Errorf("invalid HDMI port %d: must be 1–5", port)
+	}
+	if hdmiSwitchBaseURL() == "" {
+		return errors.New("no HDMI switch configured")
 	}
 	path := "/select/HDMI%20select/set?option=" + url.QueryEscape(fmt.Sprintf("HDMI%d", port))
 
@@ -332,12 +350,8 @@ type HDMISwitchConfig struct {
 }
 
 func rpcGetHDMISwitchConfig() (HDMISwitchConfig, error) {
-	u := defaultHDMISwitchURL
-	if config.HDMISwitchURL != "" {
-		u = config.HDMISwitchURL
-	}
 	return HDMISwitchConfig{
-		URL:         u,
+		URL:         config.HDMISwitchURL,
 		Username:    config.HDMISwitchUsername,
 		HasPassword: config.HDMISwitchPassword != "",
 	}, nil
@@ -364,15 +378,16 @@ func rpcSetHDMISwitchConfig(cfg HDMISwitchConfig) error {
 		return err
 	}
 	config.HDMISwitchURL = strings.TrimSpace(cfg.URL)
-	if config.HDMISwitchURL == "" {
-		config.HDMISwitchURL = u
-	}
 	config.HDMISwitchUsername = creds.username
 	config.HDMISwitchPassword = creds.password
 	if err := SaveConfig(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
-	logger.Info().Str("url", u).Bool("auth", creds.username != "").Msg("HDMI switch settings updated")
+	if u == "" {
+		logger.Info().Msg("HDMI switch disabled")
+	} else {
+		logger.Info().Str("url", u).Bool("auth", creds.username != "").Msg("HDMI switch settings updated")
+	}
 	reconnectHDMISwitch()
 	return nil
 }
@@ -383,6 +398,9 @@ func rpcTestHDMISwitchConfig(cfg HDMISwitchConfig) (string, error) {
 	u, creds, err := resolveHDMISwitchForm(cfg)
 	if err != nil {
 		return "", err
+	}
+	if u == "" {
+		return "", errors.New("enter the switch address first")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

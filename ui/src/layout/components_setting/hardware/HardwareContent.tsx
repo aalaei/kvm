@@ -9,6 +9,7 @@ import { BacklightSettings, useSettingsStore } from "@/hooks/stores";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { InputField } from "@components/InputField";
 import notifications from "@/notifications";
+import { HdmiSwitchSettings } from "@components/extensions/HdmiSwitch";
 
 
 export default function SettingsHardware() {
@@ -325,6 +326,18 @@ export default function SettingsHardware() {
           />
         </SettingsItem>
 
+      </div>
+
+      <div className="space-y-4">
+        <SettingsItem
+          title={$at("HDMI Switch")}
+          description={$at("Optional ESPHome HDMI switch controlled from the toolbar")}
+          className="w-full flex-col"
+        >
+          <div className="w-full pt-2">
+            <HdmiSwitchSettings />
+          </div>
+        </SettingsItem>
       </div>
 
       {/*<UsbEpModeSetting />*/}

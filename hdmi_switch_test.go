@@ -4,10 +4,10 @@ import "testing"
 
 func TestNormalizeHDMISwitchURL(t *testing.T) {
 	cases := map[string]string{
-		"":                          "http://esp-hdmi-mux.local",
+		"":                          "",
 		"esp-hdmi-mux.local":        "http://esp-hdmi-mux.local",
-		" 192.0.2.10 ":          "http://192.0.2.10",
-		"192.0.2.10:8080/":      "http://192.0.2.10:8080",
+		" 192.0.2.10 ":              "http://192.0.2.10",
+		"192.0.2.10:8080/":          "http://192.0.2.10:8080",
 		"https://switch.lan/":       "https://switch.lan",
 		"http://esp-hdmi-mux.local": "http://esp-hdmi-mux.local",
 	}

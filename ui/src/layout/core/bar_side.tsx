@@ -12,7 +12,7 @@ import SettingsVideoSide from "@/layout/components_side/Video/SettingsVideoSide"
 import SettingsMacros from "@/layout/components_side/Macros";
 import SharedFolders from "@/layout/components_side/SharedFolders";
 import VirtualMediaSource from "@/layout/components_side/VirtualMediaSource";
-import { HdmiSwitch } from "@components/extensions/HdmiSwitch";
+import { HdmiSwitch, useHdmiSwitchConfigured } from "@components/extensions/HdmiSwitch";
 
 interface SidebarContainerProps {
   readonly sidebarView: string | null;
@@ -22,6 +22,7 @@ export default  function SidebarContainer(props: SidebarContainerProps) {
   const { $at } = useReactAt();
   const { sidebarView } = props;
   const macrosSideTitle = useMacrosSideTitleState(state => state.sideTitle);
+  const hdmiSwitchConfigured = useHdmiSwitchConfigured();
 
   // useConsoleLog()
   // { "border-x-transparent": !sidebarView },
@@ -64,7 +65,7 @@ export default  function SidebarContainer(props: SidebarContainerProps) {
           {isDesktop&&<StatsSidebar title={$at("Virtual Media Source")} targetView={"VirtualMedia"}>
             <VirtualMediaSource />
           </StatsSidebar> }
-          {isDesktop&&<StatsSidebar title={$at("HDMI Switch")} targetView={"HdmiSwitch"} className={"p-[20px]"}>
+          {isDesktop&&hdmiSwitchConfigured&&<StatsSidebar title={$at("HDMI Switch")} targetView={"HdmiSwitch"} className={"p-[20px]"}>
             <HdmiSwitch />
           </StatsSidebar>}
           </>
