@@ -22,10 +22,11 @@ var (
 )
 
 const (
-	maxAudioFrameSize = 1500
-	frameDurationMs   = 20
-	timestampRate     = 48000
-	timestampStep     = timestampRate * frameDurationMs / 1000
+	audioStreamerBinary = "kvm_audio_stream"
+	maxAudioFrameSize   = 1500
+	frameDurationMs     = 20
+	timestampRate       = 48000
+	timestampStep       = timestampRate * frameDurationMs / 1000
 )
 
 func waitUDPPortReleased(port int, retries int, delay time.Duration) error {
@@ -139,11 +140,18 @@ func StartAudioStreamer(port int, rateFactor float64) error {
 	audioStreamerLock.Lock()
 	defer audioStreamerLock.Unlock()
 
-	// Stop existing streamer if running
+	// Stop existing streamer if running (its Wait goroutine reaps it)
 	if audioStreamerCmd != nil && audioStreamerCmd.Process != nil {
 		audioLogger.Info().Msg("stopping existing audio streamer")
 		_ = audioStreamerCmd.Process.Kill()
 		audioStreamerCmd = nil
+	}
+
+	// Only one process can hold the HDMI capture device; clear any streamer
+	// left behind by a previous kvm_app instance.
+	if n := killStaleProcesses(audioStreamerBinary, 0); n > 0 {
+		audioLogger.Warn().Int("count", n).Msg("killed stale kvm_audio_stream processes")
+		time.Sleep(200 * time.Millisecond) // let the kernel release the ALSA device
 	}
 
 	portStr := fmt.Sprintf("%d", port)
@@ -152,7 +160,8 @@ func StartAudioStreamer(port int, rateFactor float64) error {
 
 	audioLogger.Info().Strs("args", args).Msg("starting audio streamer (kvm_audio_stream)")
 
-	cmd := exec.Command("/userdata/picokvm/bin/kvm_audio_stream", args...)
+	cmd := exec.Command("/userdata/picokvm/bin/"+audioStreamerBinary, args...)
+	bindChildToParent(cmd)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("failed to get stderr pipe: %w", err)
@@ -163,14 +172,25 @@ func StartAudioStreamer(port int, rateFactor float64) error {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// log stderr output
+	// Log stderr, then reap the process so it never lingers as a zombie, and
+	// report exits we didn't ask for (e.g. capture device busy).
 	go func() {
+		var lastLine string
 		s := bufio.NewScanner(stderr)
 		for s.Scan() {
-			audioLogger.Debug().Str("kvm_audio_stream", s.Text()).Msg("kvm_audio_stream")
+			lastLine = s.Text()
+			audioLogger.Debug().Str("kvm_audio_stream", lastLine).Msg("kvm_audio_stream")
 		}
-		if err := s.Err(); err != nil {
-			audioLogger.Warn().Err(err).Msg("error reading ffmpeg stderr")
+		waitErr := cmd.Wait()
+
+		audioStreamerLock.Lock()
+		unexpected := audioStreamerCmd == cmd
+		if unexpected {
+			audioStreamerCmd = nil
+		}
+		audioStreamerLock.Unlock()
+		if unexpected {
+			audioLogger.Warn().Err(waitErr).Str("last_output", lastLine).Msg("audio streamer exited unexpectedly")
 		}
 	}()
 
@@ -187,8 +207,7 @@ func StopAudioStreamer() {
 		return
 	}
 	audioLogger.Info().Msg("stopping audio streamer")
-	_ = audioStreamerCmd.Process.Kill()
-	_ = audioStreamerCmd.Wait()
+	_ = audioStreamerCmd.Process.Kill() // reaped by the goroutine in StartAudioStreamer
 	audioStreamerCmd = nil
 }
 
