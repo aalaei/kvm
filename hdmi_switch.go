@@ -134,6 +134,7 @@ type HDMISwitchState struct {
 	PortNames   []string `json:"portNames"`   // index 0 = port 1, len=5
 	Available   bool     `json:"available"`
 	Configured  bool     `json:"configured"`
+	SyncUSB     *bool    `json:"syncUsb,omitempty"` // nil = switch has no "Sync USB" entity
 	LastError   string   `json:"lastError,omitempty"`
 }
 
@@ -148,9 +149,22 @@ var (
 	hdmiSwitchWake       = make(chan struct{}, 1)
 )
 
+// sseStatePayload is one ESPHome web_server "state" event. "value" is a
+// string for selects/text sensors but a bool for switches, so it is decoded
+// leniently; "state" is always a string ("ON"/"OFF", "HDMI3", ...).
 type sseStatePayload struct {
-	ID    string `json:"id"`
-	Value string `json:"value"`
+	ID    string          `json:"id"`
+	Value json.RawMessage `json:"value"`
+	State string          `json:"state"`
+}
+
+// StringValue returns "value" when it is a JSON string, otherwise "state".
+func (p sseStatePayload) StringValue() string {
+	var v string
+	if json.Unmarshal(p.Value, &v) == nil {
+		return v
+	}
+	return p.State
 }
 
 func initHDMISwitch() {
@@ -271,19 +285,23 @@ func applyHDMISwitchSSEState(p sseStatePayload) {
 	hdmiSwitchStateLock.Lock()
 	defer hdmiSwitchStateLock.Unlock()
 
+	v := p.StringValue()
 	switch normalizeESPHomeID(p.ID) {
 	case "select-hdmi_select":
-		hdmiSwitchState.CurrentPort = parseHDMIPortNumber(p.Value)
+		hdmiSwitchState.CurrentPort = parseHDMIPortNumber(v)
 	case "text_sensor-hdmi_1_name":
-		hdmiSwitchState.PortNames[0] = p.Value
+		hdmiSwitchState.PortNames[0] = v
 	case "text_sensor-hdmi_2_name":
-		hdmiSwitchState.PortNames[1] = p.Value
+		hdmiSwitchState.PortNames[1] = v
 	case "text_sensor-hdmi_3_name":
-		hdmiSwitchState.PortNames[2] = p.Value
+		hdmiSwitchState.PortNames[2] = v
 	case "text_sensor-hdmi_4_name":
-		hdmiSwitchState.PortNames[3] = p.Value
+		hdmiSwitchState.PortNames[3] = v
 	case "text_sensor-hdmi_5_name":
-		hdmiSwitchState.PortNames[4] = p.Value
+		hdmiSwitchState.PortNames[4] = v
+	case "switch-sync_usb":
+		on := strings.EqualFold(p.State, "ON")
+		hdmiSwitchState.SyncUSB = &on
 	}
 }
 
@@ -308,6 +326,7 @@ func rpcGetHDMISwitchState() (HDMISwitchState, error) {
 		PortNames:   names,
 		Available:   hdmiSwitchState.Available,
 		Configured:  hdmiSwitchBaseURL() != "",
+		SyncUSB:     hdmiSwitchState.SyncUSB,
 		LastError:   hdmiSwitchState.LastError,
 	}, nil
 }
@@ -335,6 +354,33 @@ func rpcSetHDMIPort(port int) error {
 	hdmiSwitchState.CurrentPort = port
 	hdmiSwitchStateLock.Unlock()
 
+	return nil
+}
+
+// rpcSetHDMISyncUSB turns the switch's "Sync USB" option on or off (USB
+// follows the selected HDMI input when on).
+func rpcSetHDMISyncUSB(enabled bool) error {
+	if hdmiSwitchBaseURL() == "" {
+		return errors.New("no HDMI switch configured")
+	}
+	action := "turn_off"
+	if enabled {
+		action = "turn_on"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := hdmiSwitchRequest(ctx, http.MethodPost, hdmiSwitchBaseURL(), "/switch/Sync%20USB/"+action, currentHDMISwitchCredentials())
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	// Optimistic local update; SSE will confirm shortly
+	hdmiSwitchStateLock.Lock()
+	hdmiSwitchState.SyncUSB = &enabled
+	hdmiSwitchStateLock.Unlock()
 	return nil
 }
 

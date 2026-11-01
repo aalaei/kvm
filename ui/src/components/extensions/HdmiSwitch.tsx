@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Switch } from "antd";
 import { LuMonitor, LuSettings } from "react-icons/lu";
 
 import { Button } from "@components/Button";
@@ -14,6 +15,7 @@ interface HDMISwitchState {
   portNames: string[];
   available: boolean;
   configured?: boolean;
+  syncUsb?: boolean; // undefined = switch has no "Sync USB" option
   lastError?: string;
 }
 
@@ -214,6 +216,19 @@ export function HdmiSwitch() {
   });
   const [switching, setSwitching] = useState<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+
+  const handleSyncUsb = (enabled: boolean) => {
+    setSyncBusy(true);
+    send("setHDMISyncUSB", { enabled }, resp => {
+      setSyncBusy(false);
+      if ("error" in resp) {
+        notifications.error(`Failed to change Sync USB: ${resp.error.data || "Unknown error"}`);
+        return;
+      }
+      setState(prev => ({ ...prev, syncUsb: enabled }));
+    });
+  };
 
   const fetchState = useCallback(() => {
     send("getHDMISwitchState", {}, resp => {
@@ -283,6 +298,27 @@ export function HdmiSwitch() {
             </span>
           )}
         </p>
+      )}
+
+      {state.syncUsb !== undefined && (
+        <Card className="animate-fadeIn opacity-0">
+          <div className="flex items-center justify-between gap-3 p-3">
+            <div>
+              <p className="text-sm font-semibold leading-none text-slate-900 dark:text-slate-100">
+                Sync USB
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                USB follows the selected HDMI input
+              </p>
+            </div>
+            <Switch
+              checked={state.syncUsb}
+              loading={syncBusy}
+              disabled={!state.available || syncBusy}
+              onChange={handleSyncUsb}
+            />
+          </div>
+        </Card>
       )}
 
       <Card className="animate-fadeIn opacity-0">

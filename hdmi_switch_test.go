@@ -1,6 +1,9 @@
 package kvm
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestNormalizeHDMISwitchURL(t *testing.T) {
 	cases := map[string]string{
@@ -32,5 +35,26 @@ func TestNormalizeESPHomeID(t *testing.T) {
 		if got := normalizeESPHomeID(in); got != want {
 			t.Errorf("normalizeESPHomeID(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestApplyHDMISwitchSSEState(t *testing.T) {
+	hdmiSwitchState = &HDMISwitchState{PortNames: make([]string, 5)}
+	for _, raw := range []string{
+		`{"id":"select/HDMI select","value":"HDMI3","state":"HDMI3"}`,
+		`{"id":"text_sensor/HDMI 2 Name","value":"TV","state":"TV"}`,
+		`{"id":"switch/Sync USB","value":true,"state":"ON"}`,
+	} {
+		var p sseStatePayload
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatalf("unmarshal %s: %v", raw, err)
+		}
+		applyHDMISwitchSSEState(p)
+	}
+	if hdmiSwitchState.CurrentPort != 3 || hdmiSwitchState.PortNames[1] != "TV" {
+		t.Errorf("port/name not applied: %+v", hdmiSwitchState)
+	}
+	if hdmiSwitchState.SyncUSB == nil || !*hdmiSwitchState.SyncUSB {
+		t.Errorf("sync usb not applied: %v", hdmiSwitchState.SyncUSB)
 	}
 }

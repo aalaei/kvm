@@ -1981,6 +1981,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getBootStorageType":        {Func: rpcGetBootStorageType},
 	"getHDMISwitchState":        {Func: rpcGetHDMISwitchState},
 	"setHDMIPort":               {Func: rpcSetHDMIPort, Params: []string{"port"}},
+	"setHDMISyncUSB":            {Func: rpcSetHDMISyncUSB, Params: []string{"enabled"}},
 	"getHDMISwitchConfig":       {Func: rpcGetHDMISwitchConfig},
 	"setHDMISwitchConfig":       {Func: rpcSetHDMISwitchConfig, Params: []string{"config"}},
 	"testHDMISwitchConfig":      {Func: rpcTestHDMISwitchConfig, Params: []string{"config"}},
