@@ -29,6 +29,7 @@ const (
 	mdnsGroupIPv4    = "224.0.0.251"
 	mdnsPort         = 5353
 	responseTTL      = 4500 // RFC 6762 §11.3: 75 min for unique records
+	legacyTTL        = 10   // RFC 6762 §6.7: max TTL in legacy unicast replies
 	announceInterval = 45 * time.Second
 
 	// classCacheFlush is ClassINET with the cache-flush bit set (bit 15).
@@ -315,78 +316,7 @@ func (m *MDNS) handlePacket(buf []byte, ifIndex int, dstIP net.IP, src *net.UDPA
 		if err != nil {
 			return
 		}
-
-		localIP := m.findLocalIPv4(ifIndex, ifaces)
-		localIP6 := m.findLocalIPv6(ifIndex, ifaces)
-		inst := instanceName(localNames)
-
-		for _, q := range questions {
-			qname := strings.ToLower(q.Name.String())
-
-			// Determine response destination per RFC 6762 §6.
-			isQU := q.Class&(1<<15) != 0
-			isLegacy := src.Port != mdnsPort
-			isDirect := len(dstIP) > 0 && !dstIP.Equal(net.ParseIP(mdnsGroupIPv4))
-			dst := mdnsGroupAddr
-			if isQU || isLegacy || isDirect {
-				dst = src
-			}
-
-			m.l.Info().
-				Str("from", src.String()).
-				Str("query_dst", dstIP.String()).
-				Str("q", qname).
-				Str("type", q.Type.String()).
-				Bool("qu", isQU).Bool("legacy", isLegacy).Bool("direct", isDirect).
-				Str("will_respond_to", dst.String()).
-				Msg("mDNS query received")
-
-			switch q.Type {
-			case dnsmessage.TypeAAAA:
-				if !localIP6.IsValid() {
-					continue
-				}
-				for _, ln := range localNames {
-					if qname == ln {
-						m.l.Info().Str("from", src.String()).Str("name", ln).Str("dst", dst.String()).Msg("mDNS AAAA query — sending response")
-						m.sendAAAARecord(header.ID, ln, localIP6, ifIndex, dst, pconn, ifaces)
-					}
-				}
-
-			case dnsmessage.TypeA, dnsmessage.TypeALL:
-				// Hostname A (or ANY) query — respond with A and AAAA if available.
-				if !localIP.IsValid() {
-					continue
-				}
-				for _, ln := range localNames {
-					if qname == ln {
-						m.l.Info().Str("from", src.String()).Str("name", ln).Str("dst", dst.String()).Msg("mDNS A query — sending response")
-						m.sendARecord(header.ID, ln, localIP, ifIndex, dst, pconn, ifaces)
-						if localIP6.IsValid() {
-							m.sendAAAARecord(header.ID, ln, localIP6, ifIndex, dst, pconn, ifaces)
-						}
-					}
-				}
-
-			case dnsmessage.TypePTR:
-				if !localIP.IsValid() || inst == "" {
-					continue
-				}
-				// _services._dns-sd._udp.local. → list our service types.
-				if qname == "_services._dns-sd._udp.local." {
-					for _, svc := range services {
-						m.sendServiceTypePtr(header.ID, svc.Type, ifIndex, dst, pconn, ifaces)
-					}
-					continue
-				}
-				// _http._tcp.local. (or any registered type) → full service record.
-				for _, svc := range services {
-					if qname == svc.Type+".local." {
-						m.sendServiceRecords(header.ID, inst, localIP, localIP6, svc, ifIndex, dst, pconn, ifaces)
-					}
-				}
-			}
-		}
+		m.answerQuery(header.ID, questions, ifIndex, dstIP, src, localNames, services, pconn, ifaces)
 		return
 	}
 
@@ -514,82 +444,157 @@ func (m *MDNS) findLocalIPv6(ifIndex int, ifaces []net.Interface) netip.Addr {
 	return netip.Addr{}
 }
 
-func (m *MDNS) sendARecord(queryID uint16, name string, ip netip.Addr, ifIndex int, dst *net.UDPAddr, pconn *ipv4.PacketConn, ifaces []net.Interface) {
-	packed, err := dnsmessage.NewName(name)
-	if err != nil {
+func aRecord(name dnsmessage.Name, ip netip.Addr) dnsmessage.Resource {
+	return dnsmessage.Resource{
+		Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: classCacheFlush, TTL: responseTTL},
+		Body:   &dnsmessage.AResource{A: ip.As4()},
+	}
+}
+
+func aaaaRecord(name dnsmessage.Name, ip netip.Addr) dnsmessage.Resource {
+	return dnsmessage.Resource{
+		Header: dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeAAAA, Class: classCacheFlush, TTL: responseTTL},
+		Body:   &dnsmessage.AAAAResource{AAAA: ip.As16()},
+	}
+}
+
+// answerQuery answers all questions of one query packet with a single
+// response packet, following RFC 6762 §6 for where to send it and §6.7 for
+// legacy unicast queriers (source port != 5353).
+//
+// Legacy unicast is what plain DNS stub resolvers do, including Android's
+// resolver for "*.local" lookups (getaddrinfo / ping). Those resolvers
+// validate the reply like ordinary DNS: it must repeat the question, and
+// records must use class IN without the mDNS cache-flush bit. Replies that
+// don't are silently discarded, and Android then negative-caches the name.
+func (m *MDNS) answerQuery(queryID uint16, questions []dnsmessage.Question, ifIndex int, dstIP net.IP, src *net.UDPAddr,
+	localNames []string, services []Service, pconn *ipv4.PacketConn, ifaces []net.Interface) {
+	localIP := m.findLocalIPv4(ifIndex, ifaces)
+	localIP6 := m.findLocalIPv6(ifIndex, ifaces)
+	inst := instanceName(localNames)
+
+	legacy := src.Port != mdnsPort
+	direct := len(dstIP) > 0 && !dstIP.Equal(net.ParseIP(mdnsGroupIPv4))
+	qu := false
+	for _, q := range questions {
+		if q.Class&(1<<15) != 0 {
+			qu = true
+		}
+	}
+	dst := mdnsGroupAddr
+	if qu || legacy || direct {
+		dst = src
+	}
+
+	isLocalName := func(qname string) (dnsmessage.Name, bool) {
+		for _, ln := range localNames {
+			if qname == ln {
+				n, err := dnsmessage.NewName(ln)
+				return n, err == nil
+			}
+		}
+		return dnsmessage.Name{}, false
+	}
+
+	var answers, extras []dnsmessage.Resource
+	var answered []dnsmessage.Question
+	for _, q := range questions {
+		qname := strings.ToLower(q.Name.String())
+		before := len(answers)
+
+		m.l.Debug().Str("from", src.String()).Str("q", qname).Str("type", q.Type.String()).
+			Bool("qu", qu).Bool("legacy", legacy).Bool("direct", direct).
+			Msg("mDNS query received")
+
+		switch q.Type {
+		case dnsmessage.TypeA, dnsmessage.TypeAAAA, dnsmessage.TypeALL:
+			name, ok := isLocalName(qname)
+			if !ok {
+				continue
+			}
+			wantA := q.Type != dnsmessage.TypeAAAA
+			wantAAAA := q.Type != dnsmessage.TypeA
+			if localIP.IsValid() {
+				if wantA {
+					answers = append(answers, aRecord(name, localIP))
+				} else {
+					extras = append(extras, aRecord(name, localIP))
+				}
+			}
+			if localIP6.IsValid() {
+				if wantAAAA {
+					answers = append(answers, aaaaRecord(name, localIP6))
+				} else {
+					extras = append(extras, aaaaRecord(name, localIP6))
+				}
+			}
+
+		case dnsmessage.TypePTR:
+			if !localIP.IsValid() || inst == "" {
+				continue
+			}
+			if qname == "_services._dns-sd._udp.local." {
+				enum, err := dnsmessage.NewName(qname)
+				if err != nil {
+					continue
+				}
+				for _, svc := range services {
+					svcName, err := dnsmessage.NewName(svc.Type + ".local.")
+					if err != nil {
+						continue
+					}
+					answers = append(answers, dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{Name: enum, Type: dnsmessage.TypePTR, Class: dnsmessage.ClassINET, TTL: responseTTL},
+						Body:   &dnsmessage.PTRResource{PTR: svcName},
+					})
+				}
+				continue
+			}
+			for _, svc := range services {
+				if qname == svc.Type+".local." {
+					answers = append(answers, serviceRecords(inst, localIP, localIP6, svc)...)
+				}
+			}
+		}
+		if len(answers) > before {
+			answered = append(answered, q)
+		}
+	}
+	if len(answers) == 0 {
 		return
 	}
-	ipBytes := ip.As4()
+
 	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{ID: queryID, Response: true, Authoritative: true},
-		Answers: []dnsmessage.Resource{{
-			Header: dnsmessage.ResourceHeader{Name: packed, Type: dnsmessage.TypeA, Class: classCacheFlush, TTL: responseTTL},
-			Body:   &dnsmessage.AResource{A: ipBytes},
-		}},
+		Header:  dnsmessage.Header{ID: queryID, Response: true, Authoritative: true},
+		Answers: answers,
 	}
+	if dst == mdnsGroupAddr {
+		msg.Header.ID = 0 // RFC 6762 §18.1: multicast responses use ID 0
+	}
+	if legacy {
+		// RFC 6762 §6.7: repeat the question, no cache-flush bit, TTL <= 10s,
+		// and only what was asked for (avahi does the same).
+		msg.Questions = answered
+		for i := range msg.Answers {
+			msg.Answers[i].Header.Class = dnsmessage.ClassINET
+			if msg.Answers[i].Header.TTL > legacyTTL {
+				msg.Answers[i].Header.TTL = legacyTTL
+			}
+		}
+	} else {
+		msg.Additionals = extras
+	}
+
 	raw, err := msg.Pack()
 	if err != nil {
+		m.l.Warn().Err(err).Msg("mDNS: failed to pack response")
 		return
 	}
+	m.l.Debug().Str("dst", dst.String()).Int("answers", len(msg.Answers)).Bool("legacy", legacy).Msg("mDNS response sent")
 	m.writePacket(raw, dst, ifIndex, pconn, ifaces)
 }
 
-func (m *MDNS) sendAAAARecord(queryID uint16, name string, ip netip.Addr, ifIndex int, dst *net.UDPAddr, pconn *ipv4.PacketConn, ifaces []net.Interface) {
-	packed, err := dnsmessage.NewName(name)
-	if err != nil {
-		return
-	}
-	ipBytes := ip.As16()
-	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{ID: queryID, Response: true, Authoritative: true},
-		Answers: []dnsmessage.Resource{{
-			Header: dnsmessage.ResourceHeader{Name: packed, Type: dnsmessage.TypeAAAA, Class: classCacheFlush, TTL: responseTTL},
-			Body:   &dnsmessage.AAAAResource{AAAA: ipBytes},
-		}},
-	}
-	raw, err := msg.Pack()
-	if err != nil {
-		return
-	}
-	m.writePacket(raw, dst, ifIndex, pconn, ifaces)
-}
-
-// sendServiceTypePtr responds to _services._dns-sd._udp.local. with a PTR for svcType.
-func (m *MDNS) sendServiceTypePtr(queryID uint16, svcType string, ifIndex int, dst *net.UDPAddr, pconn *ipv4.PacketConn, ifaces []net.Interface) {
-	svcFQDN := svcType + ".local."
-	enum := "_services._dns-sd._udp.local."
-
-	enumPacked, err := dnsmessage.NewName(enum)
-	if err != nil {
-		return
-	}
-	svcPacked, err := dnsmessage.NewName(svcFQDN)
-	if err != nil {
-		return
-	}
-	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{ID: queryID, Response: true, Authoritative: true},
-		Answers: []dnsmessage.Resource{{
-			Header: dnsmessage.ResourceHeader{Name: enumPacked, Type: dnsmessage.TypePTR, Class: dnsmessage.ClassINET, TTL: responseTTL},
-			Body:   &dnsmessage.PTRResource{PTR: svcPacked},
-		}},
-	}
-	raw, err := msg.Pack()
-	if err != nil {
-		return
-	}
-	m.writePacket(raw, dst, ifIndex, pconn, ifaces)
-}
-
-// sendServiceRecords sends PTR + SRV + TXT + A (+ AAAA if available) for a service in response to a PTR query.
-func (m *MDNS) sendServiceRecords(queryID uint16, inst string, ip netip.Addr, ip6 netip.Addr, svc Service, ifIndex int, dst *net.UDPAddr, pconn *ipv4.PacketConn, ifaces []net.Interface) {
-	raw := m.buildServiceMsg(queryID, inst, ip, ip6, svc)
-	if raw != nil {
-		m.writePacket(raw, dst, ifIndex, pconn, ifaces)
-	}
-}
-
-// buildServiceMsg builds a DNS-SD announcement with ALL records in the Answers
+// serviceRecords builds a DNS-SD record set with ALL records in the Answers
 // section, matching Avahi's wire format. RFC 6763 §12 says put SRV/TXT/A in
 // Additional, but Android's mDNS daemon only caches A records it finds in the
 // Answers section of unsolicited announcements — it ignores Additional for
@@ -598,7 +603,7 @@ func (m *MDNS) sendServiceRecords(queryID uint16, inst string, ip netip.Addr, ip
 //
 // ip6 may be the zero value when no non-link-local IPv6 address is available;
 // in that case no AAAA record is included.
-func (m *MDNS) buildServiceMsg(queryID uint16, inst string, ip netip.Addr, ip6 netip.Addr, svc Service) []byte {
+func serviceRecords(inst string, ip netip.Addr, ip6 netip.Addr, svc Service) []dnsmessage.Resource {
 	hostFQDN := inst + ".local."
 	svcFQDN := svc.Type + ".local."
 	instFQDN := inst + "." + svcFQDN // e.g. "picokvm._http._tcp.local."
@@ -650,15 +655,7 @@ func (m *MDNS) buildServiceMsg(queryID uint16, inst string, ip netip.Addr, ip6 n
 		})
 	}
 
-	msg := dnsmessage.Message{
-		Header:  dnsmessage.Header{ID: queryID, Response: true, Authoritative: true},
-		Answers: answers,
-	}
-	raw, err := msg.Pack()
-	if err != nil {
-		return nil
-	}
-	return raw
+	return answers
 }
 
 func (m *MDNS) writePacket(raw []byte, dst *net.UDPAddr, ifIndex int, pconn *ipv4.PacketConn, ifaces []net.Interface) {
@@ -737,20 +734,32 @@ func (m *MDNS) sendAnnounce() bool {
 
 	inst := instanceName(localNames)
 
-	// A (and AAAA if available) record announcements for the hostname.
-	for _, name := range localNames {
-		m.sendARecord(0, name, localIP, 0, mdnsGroupAddr, pconn, ifaces)
-		if localIP6.IsValid() {
-			m.sendAAAARecord(0, name, localIP6, 0, mdnsGroupAddr, pconn, ifaces)
+	announce := func(answers []dnsmessage.Resource) {
+		if len(answers) == 0 {
+			return
 		}
+		msg := dnsmessage.Message{Header: dnsmessage.Header{Response: true, Authoritative: true}, Answers: answers}
+		if raw, err := msg.Pack(); err == nil {
+			m.writePacket(raw, mdnsGroupAddr, 0, pconn, ifaces)
+		}
+	}
+
+	// A (and AAAA if available) record announcements for the hostname.
+	for _, ln := range localNames {
+		name, err := dnsmessage.NewName(ln)
+		if err != nil {
+			continue
+		}
+		answers := []dnsmessage.Resource{aRecord(name, localIP)}
+		if localIP6.IsValid() {
+			answers = append(answers, aaaaRecord(name, localIP6))
+		}
+		announce(answers)
 	}
 
 	// DNS-SD service announcements (PTR + SRV + TXT + A [+ AAAA]).
 	for _, svc := range services {
-		raw := m.buildServiceMsg(0, inst, localIP, localIP6, svc)
-		if raw != nil {
-			m.writePacket(raw, mdnsGroupAddr, 0, pconn, ifaces)
-		}
+		announce(serviceRecords(inst, localIP, localIP6, svc))
 	}
 
 	m.l.Info().Str("ip", localIP.String()).Str("ip6", localIP6.String()).Str("instance", inst).
