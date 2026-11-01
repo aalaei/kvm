@@ -127,6 +127,8 @@ type Config struct {
 	AudioMode                  string                 `json:"audio_mode"`
 	AudioRateFactor            float64                `json:"audio_rate_factor"`
 	HDMISwitchURL              string                 `json:"hdmi_switch_url"`
+	HDMISwitchUsername         string                 `json:"hdmi_switch_username,omitempty"`
+	HDMISwitchPassword         string                 `json:"hdmi_switch_password,omitempty"`
 	TimeZone                   string                 `json:"time_zone"`
 	LEDGreenMode               string                 `json:"led_green_mode"`
 	LEDYellowMode              string                 `json:"led_yellow_mode"`

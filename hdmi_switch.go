@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,48 +15,132 @@ import (
 	"time"
 )
 
+const defaultHDMISwitchURL = "http://esp-hdmi-mux.local"
+
+// hdmiSwitchBaseURL returns the configured switch address as a URL without a
+// trailing slash. The setting may be a bare hostname / mDNS name / IP
+// (optionally with :port) or a full http(s) URL.
 func hdmiSwitchBaseURL() string {
-	if config != nil && config.HDMISwitchURL != "" {
-		return config.HDMISwitchURL
+	raw := ""
+	if config != nil {
+		raw = config.HDMISwitchURL
 	}
-	return "http://esp-hdmi-mux.local"
+	return normalizeHDMISwitchURL(raw)
 }
 
-// hdmiSwitchHTTPClient returns an HTTP client with a dialer that resolves
-// .local hostnames via mDNS (since the device DNS can't resolve them).
-func hdmiSwitchHTTPClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return dialer.DialContext(ctx, network, addr)
-			}
-			if strings.HasSuffix(host, ".local") && mDNS != nil {
-				qCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				ip, err := mDNS.QueryAddr(qCtx, host)
-				if err != nil {
-					logger.Warn().Err(err).Str("host", host).Msg("mDNS lookup failed, using hostname directly")
-				} else {
-					addr = net.JoinHostPort(ip.String(), port)
-				}
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
+func normalizeHDMISwitchURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultHDMISwitchURL
 	}
-	return &http.Client{Timeout: timeout, Transport: transport}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	return strings.TrimRight(raw, "/")
+}
+
+func validateHDMISwitchURL(raw string) (string, error) {
+	u, err := url.Parse(normalizeHDMISwitchURL(raw))
+	if err != nil {
+		return "", fmt.Errorf("invalid address: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("unsupported scheme %q (use http or https)", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return "", errors.New("address has no host")
+	}
+	return u.String(), nil
+}
+
+type hdmiSwitchCredentials struct {
+	username string
+	password string
+}
+
+func currentHDMISwitchCredentials() hdmiSwitchCredentials {
+	if config == nil {
+		return hdmiSwitchCredentials{}
+	}
+	return hdmiSwitchCredentials{username: config.HDMISwitchUsername, password: config.HDMISwitchPassword}
+}
+
+// hdmiSwitchTransport is shared by all switch requests so idle keep-alive
+// connections are reused instead of accumulating. Its dialer resolves .local
+// hostnames via mDNS, since the device's DNS can't resolve them.
+var hdmiSwitchTransport = &http.Transport{
+	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return dialer.DialContext(ctx, network, addr)
+		}
+		if strings.HasSuffix(host, ".local") && mDNS != nil {
+			qCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			ip, err := mDNS.QueryAddr(qCtx, host)
+			if err != nil {
+				logger.Warn().Err(err).Str("host", host).Msg("mDNS lookup failed, using hostname directly")
+			} else {
+				addr = net.JoinHostPort(ip.String(), port)
+			}
+		}
+		return dialer.DialContext(ctx, network, addr)
+	},
+	MaxIdleConnsPerHost: 2,
+	IdleConnTimeout:     60 * time.Second,
+}
+
+var hdmiSwitchClient = &http.Client{Transport: hdmiSwitchTransport}
+
+// hdmiSwitchRequest performs a request against the switch with basic auth
+// (when a username is configured) and maps auth failures to clear errors.
+func hdmiSwitchRequest(ctx context.Context, method, baseURL, path string, creds hdmiSwitchCredentials) (*http.Response, error) {
+	var body io.Reader
+	if method == http.MethodPost {
+		body = http.NoBody // ESPHome rejects POSTs without Content-Length (411)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if creds.username != "" {
+		req.SetBasicAuth(creds.username, creds.password)
+	}
+	resp, err := hdmiSwitchClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach HDMI switch: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		resp.Body.Close()
+		if creds.username == "" {
+			return nil, errors.New("HDMI switch requires a username and password")
+		}
+		return nil, errors.New("HDMI switch rejected the username or password")
+	}
+	if resp.StatusCode >= 400 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("HDMI switch returned HTTP %d", resp.StatusCode)
+	}
+	return resp, nil
 }
 
 type HDMISwitchState struct {
 	CurrentPort int      `json:"currentPort"` // 1-5, 0 = unknown
 	PortNames   []string `json:"portNames"`   // index 0 = port 1, len=5
 	Available   bool     `json:"available"`
+	LastError   string   `json:"lastError,omitempty"`
 }
 
 var (
 	hdmiSwitchState     = &HDMISwitchState{PortNames: make([]string, 5)}
 	hdmiSwitchStateLock sync.RWMutex
+
+	// hdmiSwitchReconnect cancels the current SSE subscription so the monitor
+	// reconnects immediately with the latest settings.
+	hdmiSwitchCancelLock sync.Mutex
+	hdmiSwitchCancel     context.CancelFunc
+	hdmiSwitchWake       = make(chan struct{}, 1)
 )
 
 type sseStatePayload struct {
@@ -66,21 +152,64 @@ func initHDMISwitch() {
 	go runHDMISwitchMonitor()
 }
 
-func runHDMISwitchMonitor() {
-	for {
-		if err := subscribeHDMISwitchSSE(); err != nil {
-			logger.Warn().Err(err).Msg("HDMI switch SSE disconnected")
-			hdmiSwitchStateLock.Lock()
-			hdmiSwitchState.Available = false
-			hdmiSwitchStateLock.Unlock()
-		}
-		time.Sleep(10 * time.Second)
+func setHDMISwitchUnavailable(err error) {
+	hdmiSwitchStateLock.Lock()
+	defer hdmiSwitchStateLock.Unlock()
+	hdmiSwitchState.Available = false
+	if err != nil {
+		hdmiSwitchState.LastError = err.Error()
 	}
 }
 
-func subscribeHDMISwitchSSE() error {
-	client := hdmiSwitchHTTPClient(0) // streaming — no timeout
-	resp, err := client.Get(hdmiSwitchBaseURL() + "/events")
+func runHDMISwitchMonitor() {
+	for {
+		ctx, cancel := context.WithCancel(context.Background())
+		hdmiSwitchCancelLock.Lock()
+		hdmiSwitchCancel = cancel
+		hdmiSwitchCancelLock.Unlock()
+
+		err := subscribeHDMISwitchSSE(ctx)
+		reconfigured := ctx.Err() != nil
+		cancel()
+
+		if reconfigured {
+			hdmiSwitchStateLock.Lock()
+			hdmiSwitchState.Available = false
+			hdmiSwitchState.LastError = ""
+			hdmiSwitchStateLock.Unlock()
+			select {
+			case <-hdmiSwitchWake:
+			default:
+			}
+			continue
+		}
+		if err == nil {
+			err = errors.New("event stream closed")
+		}
+		logger.Warn().Err(err).Msg("HDMI switch SSE disconnected")
+		setHDMISwitchUnavailable(err)
+
+		select {
+		case <-time.After(10 * time.Second):
+		case <-hdmiSwitchWake:
+		}
+	}
+}
+
+func reconnectHDMISwitch() {
+	hdmiSwitchCancelLock.Lock()
+	if hdmiSwitchCancel != nil {
+		hdmiSwitchCancel()
+	}
+	hdmiSwitchCancelLock.Unlock()
+	select {
+	case hdmiSwitchWake <- struct{}{}:
+	default:
+	}
+}
+
+func subscribeHDMISwitchSSE(ctx context.Context) error {
+	resp, err := hdmiSwitchRequest(ctx, http.MethodGet, hdmiSwitchBaseURL(), "/events", currentHDMISwitchCredentials())
 	if err != nil {
 		return err
 	}
@@ -88,9 +217,12 @@ func subscribeHDMISwitchSSE() error {
 
 	hdmiSwitchStateLock.Lock()
 	hdmiSwitchState.Available = true
+	hdmiSwitchState.LastError = ""
 	hdmiSwitchStateLock.Unlock()
+	logger.Info().Str("url", hdmiSwitchBaseURL()).Msg("HDMI switch connected")
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 	var eventType string
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -110,11 +242,22 @@ func subscribeHDMISwitchSSE() error {
 	return scanner.Err()
 }
 
+// normalizeESPHomeID maps both ESPHome web_server ID styles to one form:
+// legacy "text_sensor-hdmi_1_name" and current "text_sensor/HDMI 1 Name"
+// both become "text_sensor-hdmi_1_name".
+func normalizeESPHomeID(id string) string {
+	id = strings.ToLower(id)
+	if domain, name, ok := strings.Cut(id, "/"); ok {
+		id = domain + "-" + strings.ReplaceAll(name, " ", "_")
+	}
+	return id
+}
+
 func applyHDMISwitchSSEState(p sseStatePayload) {
 	hdmiSwitchStateLock.Lock()
 	defer hdmiSwitchStateLock.Unlock()
 
-	switch p.ID {
+	switch normalizeESPHomeID(p.ID) {
 	case "select-hdmi_select":
 		hdmiSwitchState.CurrentPort = parseHDMIPortNumber(p.Value)
 	case "text_sensor-hdmi_1_name":
@@ -150,6 +293,7 @@ func rpcGetHDMISwitchState() (HDMISwitchState, error) {
 		CurrentPort: hdmiSwitchState.CurrentPort,
 		PortNames:   names,
 		Available:   hdmiSwitchState.Available,
+		LastError:   hdmiSwitchState.LastError,
 	}, nil
 }
 
@@ -157,20 +301,16 @@ func rpcSetHDMIPort(port int) error {
 	if port < 1 || port > 5 {
 		return fmt.Errorf("invalid HDMI port %d: must be 1–5", port)
 	}
-	option := fmt.Sprintf("HDMI%d", port)
-	postURL := fmt.Sprintf("%s/select/HDMI%%20select/set?option=%s",
-		hdmiSwitchBaseURL(), url.QueryEscape(option))
+	path := "/select/HDMI%20select/set?option=" + url.QueryEscape(fmt.Sprintf("HDMI%d", port))
 
-	client := hdmiSwitchHTTPClient(10 * time.Second)
-	resp, err := client.Post(postURL, "application/x-www-form-urlencoded", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := hdmiSwitchRequest(ctx, http.MethodPost, hdmiSwitchBaseURL(), path, currentHDMISwitchCredentials())
 	if err != nil {
-		return fmt.Errorf("failed to reach HDMI switch: %w", err)
+		return err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("HDMI switch returned HTTP %d", resp.StatusCode)
-	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
 
 	// Optimistic local update; SSE will confirm shortly
 	hdmiSwitchStateLock.Lock()
@@ -178,4 +318,79 @@ func rpcSetHDMIPort(port int) error {
 	hdmiSwitchStateLock.Unlock()
 
 	return nil
+}
+
+// HDMISwitchConfig is the settings form. The stored password is never sent
+// to the browser: reads report only HasPassword, and on save an empty
+// Password keeps the stored one unless ClearPassword is set.
+type HDMISwitchConfig struct {
+	URL           string `json:"url"`
+	Username      string `json:"username"`
+	Password      string `json:"password,omitempty"`
+	HasPassword   bool   `json:"hasPassword"`
+	ClearPassword bool   `json:"clearPassword,omitempty"`
+}
+
+func rpcGetHDMISwitchConfig() (HDMISwitchConfig, error) {
+	u := defaultHDMISwitchURL
+	if config.HDMISwitchURL != "" {
+		u = config.HDMISwitchURL
+	}
+	return HDMISwitchConfig{
+		URL:         u,
+		Username:    config.HDMISwitchUsername,
+		HasPassword: config.HDMISwitchPassword != "",
+	}, nil
+}
+
+func resolveHDMISwitchForm(cfg HDMISwitchConfig) (string, hdmiSwitchCredentials, error) {
+	u, err := validateHDMISwitchURL(cfg.URL)
+	if err != nil {
+		return "", hdmiSwitchCredentials{}, err
+	}
+	creds := hdmiSwitchCredentials{username: strings.TrimSpace(cfg.Username), password: cfg.Password}
+	if creds.password == "" && !cfg.ClearPassword {
+		creds.password = config.HDMISwitchPassword
+	}
+	if creds.username == "" {
+		creds.password = ""
+	}
+	return u, creds, nil
+}
+
+func rpcSetHDMISwitchConfig(cfg HDMISwitchConfig) error {
+	u, creds, err := resolveHDMISwitchForm(cfg)
+	if err != nil {
+		return err
+	}
+	config.HDMISwitchURL = strings.TrimSpace(cfg.URL)
+	if config.HDMISwitchURL == "" {
+		config.HDMISwitchURL = u
+	}
+	config.HDMISwitchUsername = creds.username
+	config.HDMISwitchPassword = creds.password
+	if err := SaveConfig(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	logger.Info().Str("url", u).Bool("auth", creds.username != "").Msg("HDMI switch settings updated")
+	reconnectHDMISwitch()
+	return nil
+}
+
+// rpcTestHDMISwitchConfig checks the form's settings against the switch
+// without saving them.
+func rpcTestHDMISwitchConfig(cfg HDMISwitchConfig) (string, error) {
+	u, creds, err := resolveHDMISwitchForm(cfg)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := hdmiSwitchRequest(ctx, http.MethodGet, u, "/", creds)
+	if err != nil {
+		return "", err
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return fmt.Sprintf("Connected to %s", u), nil
 }
