@@ -8,12 +8,23 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 var ctrlSocketConn net.Conn
+
+// The EDID write makes the host re-read the descriptor, which can trigger a
+// re-enumeration. It has to run once per boot, not once per ctrl-socket
+// reconnect, so it is gated on an explicit success flag rather than sync.Once:
+// a connection that dies while the retries are still running should leave the
+// job pending for the next connection instead of marking it done.
+var (
+	edidRestoreMu sync.Mutex
+	edidRestored  bool
+)
 
 type CtrlAction struct {
 	Action string                 `json:"action"`
@@ -34,6 +45,12 @@ type EventHandler func(event CtrlResponse)
 
 var seq int32 = 1
 
+// nextSeq hands out the next control request sequence number. It is atomic because
+// several control sockets reserve sequence numbers from concurrent goroutines.
+func nextSeq() int32 {
+	return atomic.AddInt32(&seq, 1)
+}
+
 var ongoingRequests = make(map[int32]chan *CtrlResponse)
 
 var lock = &sync.Mutex{}
@@ -47,18 +64,22 @@ var (
 // Buffered to 1 so the jpeg thread doesn't block if captureScreenshot has already timed out.
 var jpegReadyCh = make(chan struct{}, 1)
 
+// jpegFailedCh carries the reason a pending snapshot can never complete. Native sends
+// it from every path that would otherwise stay silent: encoder not running,
+// VENC_GetStream giving up, unwritable spool file, uninitialised JPEG channel.
+var jpegFailedCh = make(chan string, 1)
+
 func CallCtrlAction(action string, params map[string]interface{}) (*CtrlResponse, error) {
 	lock.Lock()
 	defer lock.Unlock()
 	ctrlAction := CtrlAction{
 		Action: action,
-		Seq:    seq,
+		Seq:    nextSeq(),
 		Params: params,
 	}
 
-	responseChan := make(chan *CtrlResponse)
-	ongoingRequests[seq] = responseChan
-	seq++
+	responseChan := make(chan *CtrlResponse, 1)
+	ongoingRequests[ctrlAction.Seq] = responseChan
 
 	jsonData, err := json.Marshal(ctrlAction)
 	if err != nil {
@@ -201,8 +222,8 @@ func handleCtrlClient(conn net.Conn) {
 
 	ctrlSocketConn = conn
 
-	// Restore HDMI EDID if applicable
-	go restoreHdmiEdid()
+	// Restore HDMI EDID if applicable. Guarded so a reconnect does not re-apply it.
+	go restoreHdmiEdidOnce()
 
 	readBuf := make([]byte, 4096)
 	for {
@@ -232,6 +253,20 @@ func handleCtrlClient(conn net.Conn) {
 		case "jpeg_ready":
 			select {
 			case jpegReadyCh <- struct{}{}:
+			default:
+			}
+		case "jpeg_failed":
+			reason := "native reported a failed capture"
+			if ctrlResp.Data != nil {
+				var payload struct {
+					Error string `json:"error"`
+				}
+				if json.Unmarshal(ctrlResp.Data, &payload) == nil && payload.Error != "" {
+					reason = payload.Error
+				}
+			}
+			select {
+			case jpegFailedCh <- reason:
 			default:
 			}
 		}
@@ -375,13 +410,47 @@ func ExtractAndRunVideoBin() error {
 	return nil
 }
 
-// Restore the HDMI EDID value from the config.
-func restoreHdmiEdid() {
-	if config.EdidString != "" {
-		videoLogger.Info().Str("edid", config.EdidString).Msg("Restoring HDMI EDID")
-		_, err := CallCtrlAction("set_edid", map[string]interface{}{"edid": config.EdidString})
-		if err != nil {
-			videoLogger.Warn().Err(err).Msg("Failed to restore HDMI EDID")
+// Restore the HDMI EDID from the config. The app is the source of truth: the
+// controller may ship its own EDID, and it is overwritten here so the configured
+// value always wins. On first boot there is no configured value yet, so the
+// built-in default is written to the config and used from then on.
+func restoreHdmiEdid() bool {
+	edid := config.EdidString
+	if edid == "" {
+		edid = defaultEdidHex
+		config.EdidString = edid
+		if err := SaveConfig(); err != nil {
+			videoLogger.Warn().Err(err).Msg("Failed to persist default HDMI EDID")
+		} else {
+			videoLogger.Info().Msg("Persisted default HDMI EDID to config")
 		}
+	}
+
+	// The controller may not be ready right after the socket connects.
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, err := CallCtrlAction("set_edid", map[string]interface{}{"edid": edid})
+		if err == nil {
+			videoLogger.Info().Int("attempt", attempt).Msg("Applied HDMI EDID from config")
+			return true
+		}
+		videoLogger.Warn().Err(err).Int("attempt", attempt).Msg("Failed to apply HDMI EDID")
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	videoLogger.Error().Msg("Giving up on applying HDMI EDID from config")
+	return false
+}
+
+// restoreHdmiEdidOnce applies the configured EDID at most once per boot.
+func restoreHdmiEdidOnce() {
+	edidRestoreMu.Lock()
+	defer edidRestoreMu.Unlock()
+
+	if edidRestored {
+		return
+	}
+	if restoreHdmiEdid() {
+		edidRestored = true
 	}
 }

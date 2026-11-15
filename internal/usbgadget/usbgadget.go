@@ -51,17 +51,32 @@ type UsbGadget struct {
 	kvmGadgetPath string
 	configC1Path  string
 
+	// initErr keeps the reason Init failed. Callers that report success used to
+	// discard it, so a gadget that never reached the host was announced as rebuilt.
+	initErr error
+
 	configMap    map[string]gadgetConfigItem
 	customConfig Config
 
 	configLock sync.Mutex
 
+	// hidLifecycle is held for reading by every HID access and exclusively by a
+	// rebind, so a controller reset never overlaps an in-flight HID write.
+	hidLifecycle sync.RWMutex
+	hidOpens     hidOpenTracker
+
 	keyboardHidFile *os.File
 	keyboardLock    sync.Mutex
 	absMouseHidFile *os.File
 	absMouseLock    sync.Mutex
+	absMouseX       int   // last absolute X reported to the host, HID logical units (0-32767)
+	absMouseY       int   // last absolute Y reported to the host, HID logical units (0-32767)
+	absMouseButtons uint8 // last button bitmask reported through the absolute mouse
 	relMouseHidFile *os.File
 	relMouseLock    sync.Mutex
+
+	penTouchHidFile *os.File
+	penTouchLock    sync.Mutex
 
 	keyboardState       KeyboardState
 	keyboardStateLock   sync.Mutex
@@ -82,8 +97,10 @@ type UsbGadget struct {
 	onKeyboardStateChange *func(state KeyboardState)
 	onHidDeviceMissing    *func(device string, err error)
 
-	keysDownState       KeysDownState
-	autoReleaseTimers   []autoReleaseTimer
+	keysDownState        KeysDownState
+	onKeysDownChange     *func(state KeysDownState)
+	kbdAutoReleaseLock   sync.Mutex
+	kbdAutoReleaseTimers map[byte]*kbdAutoReleaseTimer
 
 	log *zerolog.Logger
 
@@ -129,6 +146,7 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 		keyboardLock:        sync.Mutex{},
 		absMouseLock:        sync.Mutex{},
 		relMouseLock:        sync.Mutex{},
+		penTouchLock:        sync.Mutex{},
 		txLock:              sync.Mutex{},
 		keyboardStateCtx:    keyboardCtx,
 		keyboardStateCancel: keyboardCancel,
@@ -140,22 +158,35 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 		strictMode: config.strictMode,
 
 		logSuppressionCounter: make(map[string]int),
+		kbdAutoReleaseTimers:  make(map[byte]*kbdAutoReleaseTimer),
 
 		absMouseAccumulatedWheelY: 0,
 	}
 	if err := g.Init(); err != nil {
+		g.initErr = err
 		logger.Error().Err(err).Msg("failed to init USB gadget (will retry later)")
 	}
 
 	return g
 }
 
+// InitError reports why the gadget could not be built, or nil when it was built.
+func (u *UsbGadget) InitError() error {
+	return u.initErr
+}
+
+// HasKeyboard reports whether the keyboard HID function is part of the current
+// gadget configuration. Recovery paths use it to avoid probing a function that
+// was intentionally disabled, which would report a false failure.
+func (u *UsbGadget) HasKeyboard() bool {
+	u.configLock.Lock()
+	defer u.configLock.Unlock()
+	return u.enabledDevices.Keyboard
+}
+
 // ResetHIDFiles closes all open HID gadget file descriptors.
 // After a UDC rebind, previously open /dev/hidg* handles may point to a stale
 // transport endpoint and must be reopened before use.
-//
-// Backported from upstream jetkvm/kvm commit 15dc380 ("fix: auto-recover USB
-// gadget when host power-cycles (#1297)").
 func (u *UsbGadget) ResetHIDFiles() {
 	u.keyboardLock.Lock()
 	u.closeKeyboardHidFileLocked()
@@ -174,6 +205,13 @@ func (u *UsbGadget) ResetHIDFiles() {
 		u.relMouseHidFile = nil
 	}
 	u.relMouseLock.Unlock()
+
+	u.penTouchLock.Lock()
+	if u.penTouchHidFile != nil {
+		u.penTouchHidFile.Close()
+		u.penTouchHidFile = nil
+	}
+	u.penTouchLock.Unlock()
 
 	u.log.Info().Msg("all HID file descriptors reset")
 }

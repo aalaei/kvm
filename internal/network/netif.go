@@ -210,8 +210,16 @@ func (s *NetworkInterfaceState) SetMACAddress(macAddress string) (string, error)
 	}
 	s.stateLock.Unlock()
 
-	if s.dhcpClient != nil && strings.TrimSpace(s.config.IPv4Mode.String) == "dhcp" {
-		_ = s.dhcpClient.Renew()
+	switch strings.TrimSpace(s.config.IPv4Mode.String) {
+	case "dhcp":
+		if s.dhcpClient != nil {
+			_ = s.dhcpClient.Renew()
+		}
+	case "static":
+		// cycling the link drops the addresses, so reapply the static config
+		if err := s.applyIPv4Static(); err != nil {
+			s.l.Error().Err(err).Msg("failed to reapply static IPv4 after MAC change")
+		}
 	}
 	if _, err := s.update(); err != nil {
 		return normalized, err
@@ -249,7 +257,11 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 	if changed {
 		if interfaceGoingUp {
 			s.l.Info().Msg("interface state transitioned to up")
-			dhcpTargetState = DhcpTargetStateRenew
+			if s.isStaticIPv4() {
+				dhcpTargetState = DhcpTargetStateApplyStaticIPv4
+			} else {
+				dhcpTargetState = DhcpTargetStateRenew
+			}
 		} else if interfaceGoingDown {
 			s.l.Info().Msg("interface state transitioned to down")
 		}
@@ -334,8 +346,22 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 			s.ipv4Addr = &ipv4Addresses[0]
 			changed = true
 		}
+	} else if s.ipv4Addr != nil {
+		// No address left on the interface: drop the stale pointer instead of
+		// keeping reporting an address that no longer exists.
+		s.l.Warn().Str("old_ipv4", s.ipv4Addr.String()).Msg("IPv4 address removed")
+		s.ipv4Addr = nil
+		changed = true
 	}
 	s.ipv4Addresses = ipv4AddressesString
+
+	// A static address can vanish without an up/down transition being observed
+	// (replug races, NIC reset, an external `ip addr flush`). Reapply as soon as it
+	// is noticed, otherwise the device stays unreachable until the next reboot.
+	if newInterfaceUp && !interfaceGoingUp && s.isStaticIPv4() && !s.staticAddressPresent(ipv4AddressesString) {
+		s.l.Warn().Msg("configured static IPv4 address is missing, reapplying")
+		dhcpTargetState = DhcpTargetStateApplyStaticIPv4
+	}
 
 	if ipv6LinkLocal != nil {
 		if s.ipv6LinkLocal == nil || s.ipv6LinkLocal.String() != ipv6LinkLocal.String() {
@@ -350,6 +376,20 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 			s.ipv6LinkLocal = ipv6LinkLocal
 			changed = true
 		}
+	} else if s.ipv6LinkLocal != nil {
+		s.l.Warn().Str("old_ipv6", s.ipv6LinkLocal.String()).Msg("IPv6 link local address removed")
+		s.ipv6LinkLocal = nil
+		changed = true
+	}
+	// Sort first so the primary IPv6 address picked below stays stable across
+	// polls instead of following whatever order netlink returns.
+	sortIPv6Addresses(ipv6Addresses)
+
+	if !isSameIPv6AddressList(s.ipv6Addresses, ipv6Addresses) {
+		s.l.Info().
+			Strs("ipv6_addresses", ipv6AddressStrings(ipv6Addresses)).
+			Msg("IPv6 addresses changed")
+		changed = true
 	}
 	s.ipv6Addresses = ipv6Addresses
 
@@ -367,6 +407,12 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 			s.ipv6Addr = &ipv6Addresses[0].Address
 			changed = true
 		}
+	} else if s.ipv6Addr != nil {
+		// No global address left on the interface: drop the stale pointer instead
+		// of keeping reporting an address that no longer exists.
+		s.l.Warn().Str("old_ipv6", s.ipv6Addr.String()).Msg("IPv6 address removed")
+		s.ipv6Addr = nil
+		changed = true
 	}
 
 	// if it's the initial check, we'll set changed to false
@@ -374,10 +420,11 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 	if initialCheck {
 		s.checked = true
 		changed = false
-		if dhcpTargetState == DhcpTargetStateRenew {
+		if dhcpTargetState == DhcpTargetStateRenew || dhcpTargetState == DhcpTargetStateApplyStaticIPv4 {
 			// it's the initial check, we'll start the DHCP client
 			// dhcpTargetState = DhcpTargetStateStart
 			// TODO: manage DHCP client start/stop
+			// the static IPv4 config was already applied during initialization
 			dhcpTargetState = DhcpTargetStateDoNothing
 		}
 	}
@@ -404,6 +451,11 @@ func (s *NetworkInterfaceState) CheckAndUpdateDhcp() error {
 	case DhcpTargetStateRelease:
 		s.l.Info().Msg("releasing DHCP lease")
 		_ = s.dhcpClient.Release()
+	case DhcpTargetStateApplyStaticIPv4:
+		s.l.Info().Msg("reapplying static IPv4")
+		if err := s.applyIPv4Static(); err != nil {
+			s.l.Error().Err(err).Msg("failed to reapply static IPv4")
+		}
 	case DhcpTargetStateStart:
 		s.l.Warn().Msg("dhcpTargetStateStart not implemented")
 	case DhcpTargetStateStop:
@@ -416,6 +468,83 @@ func (s *NetworkInterfaceState) CheckAndUpdateDhcp() error {
 func (s *NetworkInterfaceState) onConfigChange(config *NetworkConfig) {
     _ = s.setHostnameIfNotSame()
     s.cbConfigChange(config)
+}
+
+// applyIPv4Mode applies the configured IPv4 mode (dhcp/static/disabled) at runtime.
+func (s *NetworkInterfaceState) applyIPv4Mode() error {
+	if s.config == nil {
+		return nil
+	}
+
+	switch strings.TrimSpace(s.config.IPv4Mode.String) {
+	case "static":
+		if s.dhcpClient != nil {
+			s.dhcpClient.SetEnabled(false)
+		}
+		return s.applyIPv4Static()
+	case "dhcp":
+		// drop leftover static addresses before letting DHCP take over
+		if err := s.clearIPv4Addresses(); err != nil {
+			s.l.Warn().Err(err).Msg("failed clearing IPv4 addresses prior to dhcp apply")
+		}
+		if err := s.clearDefaultIPv4Route(); err != nil {
+			s.l.Warn().Err(err).Msg("failed clearing default route prior to dhcp apply")
+		}
+		if s.dhcpClient != nil {
+			s.dhcpClient.SetEnabled(true)
+			if reqAddr := strings.TrimSpace(s.config.IPv4RequestAddress.String); reqAddr != "" {
+				_ = s.dhcpClient.RequestAddress(reqAddr)
+			} else {
+				_ = s.dhcpClient.Renew()
+			}
+		}
+		return nil
+	case "disabled":
+		if s.dhcpClient != nil {
+			s.dhcpClient.SetEnabled(false)
+			_ = s.dhcpClient.Release()
+		}
+		if err := s.clearIPv4Addresses(); err != nil {
+			s.l.Warn().Err(err).Msg("failed clearing IPv4 addresses for disabled mode")
+		}
+		if err := s.clearDefaultIPv4Route(); err != nil {
+			s.l.Warn().Err(err).Msg("failed clearing default route for disabled mode")
+		}
+		return nil
+	}
+
+	return nil
+}
+
+// isStaticIPv4 reports whether IPv4 is configured in static mode.
+// Callers inside update() already hold stateLock, so this must not lock.
+func (s *NetworkInterfaceState) isStaticIPv4() bool {
+	return s.config != nil && strings.TrimSpace(s.config.IPv4Mode.String) == "static"
+}
+
+// staticAddressPresent reports whether the configured static IPv4 address is
+// currently assigned to the interface. Entries are CIDR strings ("10.0.0.5/24").
+func (s *NetworkInterfaceState) staticAddressPresent(addresses []string) bool {
+	if s.config == nil || s.config.IPv4Static == nil {
+		return true
+	}
+
+	wantIP := net.ParseIP(strings.TrimSpace(s.config.IPv4Static.Address.String))
+	if wantIP == nil {
+		return true
+	}
+
+	for _, addrStr := range addresses {
+		ip, _, err := net.ParseCIDR(addrStr)
+		if err != nil {
+			ip = net.ParseIP(addrStr)
+		}
+		if ip != nil && ip.Equal(wantIP) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // clearIPv4Addresses removes all IPv4 addresses from the interface.

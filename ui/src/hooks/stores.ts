@@ -6,6 +6,8 @@ import {
   MAX_TOTAL_MACROS,
   MAX_KEYS_PER_STEP,
 } from "@/constants/macros";
+import type { KeyboardFormFactor } from "@/keyboardFormFactor";
+import { suppressKeyboardTap } from "@/utils/keyboardTapGuard";
 
 // Define the JsonRpc types for better type checking
 interface JsonRpcResponse {
@@ -39,7 +41,7 @@ const appendStatToMap = <T extends { timestamp: number }>(
 
 // Constants and types
 export type AvailableSidebarViews = "ConsoleLogViewer" | "MacroMoreList" | "Fullscreen" | "TerminalTabsMobile" | "SettingsModal" | "ClipboardMobile" | "KeyboardPanel" | "MousePanel" | "SettingsVideo"
-  | "connection-stats" | "Clipboard" | "PowerControl" | "Macros" | "VirtualMedia" | "SharedFolders" | "UsbEpModeSelect" | "UsbStatusPanel" | "HdmiSwitch" | null;
+  | "connection-stats" | "Clipboard" | "PowerControl" | "Macros" | "VirtualMedia" | "SharedFolders" | "UsbEpModeSelect" | "UsbStatusPanel" | "RemoteStatus" | "HdmiStatus" | "HdmiSwitch" | null;
 export type AvailableTerminalTypes = "kvm" | "serial" | "none";
 
 export interface User {
@@ -80,53 +82,77 @@ interface UIState {
   setTerminalType: (enabled: UIState["terminalType"]) => void;
   otherSession:boolean;
   setOtherSession: (enabled: boolean) => void;
+
+  // Top and bottom bars are hidden by default and act as a single unit.
+  barsPinned: boolean;
+  setBarsPinned: (pinned: boolean) => void;
+  barsTemporarilyVisible: boolean;
+  setBarsTemporarilyVisible: (visible: boolean) => void;
+
+  // The floating mobile tool cluster (gesture/mouse/keyboard/reset view).
+  mobileToolsHidden: boolean;
+  setMobileToolsHidden: (hidden: boolean) => void;
 }
 
-export const useUiStore = create<UIState>(set => ({
-  terminalType: "none",
-  setTerminalType: type => set({ terminalType: type }),
+export const useUiStore = create<UIState>()(
+  persist<UIState, [], [], Pick<UIState, "barsPinned" | "mobileToolsHidden">>(
+    set => ({
+      terminalType: "none",
+      setTerminalType: type => set({ terminalType: type }),
 
-  sidebarView: null,
-  setSidebarView: view => set({ sidebarView: view }),
-  topBarView: null,
-  setTopBarView: view => set({ topBarView: view }),
+      sidebarView: null,
+      setSidebarView: view => set({ sidebarView: view }),
+      topBarView: null,
+      setTopBarView: view => set({ topBarView: view }),
 
-  disableVideoFocusTrap: false,
-  setDisableVideoFocusTrap: enabled => set({ disableVideoFocusTrap: enabled }),
-  isOcrMode: false,
-  setOcrMode: enabled => set({ isOcrMode: enabled }),
-  isAnimationComplete: false,
-  setIsAnimationComplete: enabled => set({ isAnimationComplete: enabled }),
+      disableVideoFocusTrap: false,
+      setDisableVideoFocusTrap: enabled => set({ disableVideoFocusTrap: enabled }),
+      isOcrMode: false,
+      setOcrMode: enabled => set({ isOcrMode: enabled }),
+      isAnimationComplete: false,
+      setIsAnimationComplete: enabled => set({ isAnimationComplete: enabled }),
 
-  isWakeOnLanModalVisible: false,
-  setWakeOnLanModalVisibility: enabled => set({ isWakeOnLanModalVisible: enabled }),
+      isWakeOnLanModalVisible: false,
+      setWakeOnLanModalVisibility: enabled => set({ isWakeOnLanModalVisible: enabled }),
 
-  toggleSidebarView: view =>
-    set(state => {
-      if (state.sidebarView === view) {
-        return { sidebarView: null , topBarView: null };
-      } else {
-        return { sidebarView: view , topBarView: null };
-      }
+      toggleSidebarView: view =>
+        set(state => {
+          if (state.sidebarView === view) {
+            return { sidebarView: null, topBarView: null };
+          } else {
+            return { sidebarView: view, topBarView: null };
+          }
+        }),
+      toggleTopBarView: view =>
+        set(state => {
+          if (state.topBarView === view) {
+            return { topBarView: null, sidebarView: null };
+          } else {
+            return { topBarView: view, sidebarView: null };
+          }
+        }),
+      otherSession: false,
+      setOtherSession: enabled => set({ otherSession: enabled }),
+
+      isAttachedVirtualKeyboardVisible: true,
+      setAttachedVirtualKeyboardVisibility: enabled =>
+        set({ isAttachedVirtualKeyboardVisible: enabled }),
+
+      barsPinned: false,
+      setBarsPinned: pinned => set({ barsPinned: pinned }),
+      barsTemporarilyVisible: false,
+      setBarsTemporarilyVisible: visible => set({ barsTemporarilyVisible: visible }),
+
+      mobileToolsHidden: false,
+      setMobileToolsHidden: hidden => set({ mobileToolsHidden: hidden }),
     }),
-  toggleTopBarView: view =>
-    set(state => {
-
-      if (state.topBarView === view) {
-        return { topBarView: null,sidebarView: null };
-      } else {
-        return { topBarView: view ,sidebarView: null };
-      }
-    }),
-    otherSession:false,
-    setOtherSession: enabled => set({ otherSession: enabled }),
-
-  isAttachedVirtualKeyboardVisible: true,
-  setAttachedVirtualKeyboardVisibility: enabled =>
-    set({ isAttachedVirtualKeyboardVisible: enabled }),
-}),
-
-
+    {
+      name: "ui-bars",
+      storage: createJSONStorage(() => localStorage),
+      // Only explicit choices survive a reload; the transient reveal does not.
+      partialize: state => ({ barsPinned: state.barsPinned, mobileToolsHidden: state.mobileToolsHidden }),
+    },
+  ),
 );
 
 interface RTCState {
@@ -135,6 +161,21 @@ interface RTCState {
 
   setRpcDataChannel: (channel: RTCDataChannel) => void;
   rpcDataChannel: RTCDataChannel | null;
+
+  hidRpcDisabled: boolean;
+  setHidRpcDisabled: (disabled: boolean) => void;
+
+  rpcHidProtocolVersion: number | null;
+  setRpcHidProtocolVersion: (version: number | null) => void;
+
+  rpcHidChannel: RTCDataChannel | null;
+  setRpcHidChannel: (channel: RTCDataChannel | null) => void;
+
+  rpcHidUnreliableChannel: RTCDataChannel | null;
+  setRpcHidUnreliableChannel: (channel: RTCDataChannel | null) => void;
+
+  rpcHidUnreliableNonOrderedChannel: RTCDataChannel | null;
+  setRpcHidUnreliableNonOrderedChannel: (channel: RTCDataChannel | null) => void;
 
   diskChannel: RTCDataChannel | null;
   setDiskChannel: (channel: RTCDataChannel) => void;
@@ -197,6 +238,22 @@ export const useRTCStore = create<RTCState>(set => ({
 
   rpcDataChannel: null,
   setRpcDataChannel: channel => set({ rpcDataChannel: channel }),
+
+  hidRpcDisabled: false,
+  setHidRpcDisabled: disabled => set({ hidRpcDisabled: disabled }),
+
+  rpcHidProtocolVersion: null,
+  setRpcHidProtocolVersion: version => set({ rpcHidProtocolVersion: version }),
+
+  rpcHidChannel: null,
+  setRpcHidChannel: channel => set({ rpcHidChannel: channel }),
+
+  rpcHidUnreliableChannel: null,
+  setRpcHidUnreliableChannel: channel => set({ rpcHidUnreliableChannel: channel }),
+
+  rpcHidUnreliableNonOrderedChannel: null,
+  setRpcHidUnreliableNonOrderedChannel: channel =>
+    set({ rpcHidUnreliableNonOrderedChannel: channel }),
 
   transceiver: null,
   setTransceiver: transceiver => set({ transceiver }),
@@ -303,9 +360,17 @@ export interface VideoState {
     ready: boolean;
     error?: Extract<VideoState["hdmiState"], "no_signal" | "no_lock" | "out_of_range">;
   }) => void;
+  // Raw values last reported by the device's video input event. Unlike
+  // width/height (decoded stream size) these are the HDMI source timings, so
+  // they stay 0 while there is no signal.
+  inputWidth: number;
+  inputHeight: number;
+  inputFps: number;
+  setVideoInput: (state: { width: number; height: number; fps: number }) => void;
 }
 
 export interface BacklightSettings {
+  /** Brightness percentage (0-100), same unit as the touchscreen slider. */
   max_brightness: number;
   dim_after: number;
   off_after: number;
@@ -325,6 +390,11 @@ export const useVideoStore = create<VideoState>(set => ({
   setSize: (width, height) => set({ width, height }),
 
   hdmiState: "connecting",
+  inputWidth: 0,
+  inputHeight: 0,
+  inputFps: 0,
+  setVideoInput: ({ width, height, fps }) =>
+    set({ inputWidth: width, inputHeight: height, inputFps: fps }),
   setHdmiState: state => {
     if (!state) return;
     const { ready, error } = state;
@@ -339,11 +409,22 @@ export const useVideoStore = create<VideoState>(set => ({
   },
 }));
 
-export type KeyboardLedSync = "auto" | "browser" | "host";
+// There is no "auto": the client picks a source, because whether the controlled
+// machine reports its lock lights at all is a property of that machine, not
+// something the UI can guess from here.
+export type KeyboardLedSync = "browser" | "host";
+
+// Which element the fullscreen button targets. "page" keeps our own layout,
+// overlays and screen orientation; "video" hands the stream to the browser's
+// native video player, which is what some embedded webviews support best.
+export type FullscreenMode = "page" | "video";
 
 interface SettingsState {
   language: string;
   setLanguage: (language: string) => void;
+
+  fullscreenMode: FullscreenMode;
+  setFullscreenMode: (mode: FullscreenMode) => void;
 
   isCursorHidden: boolean;
   setCursorVisibility: (enabled: boolean) => void;
@@ -363,6 +444,10 @@ interface SettingsState {
 
   backlightSettings: BacklightSettings;
   setBacklightSettings: (settings: BacklightSettings) => void;
+
+  /** Whether the panel is currently lit, kept in sync by the `displayState` event. */
+  displayOn: boolean;
+  setDisplayOn: (on: boolean) => void;
   
   timeZone: string;
   setTimeZone: (timezone: string) => void;
@@ -375,6 +460,9 @@ interface SettingsState {
 
   keyboardLayout: string;
   setKeyboardLayout: (layout: string) => void;
+
+  keyboardFormFactor: KeyboardFormFactor;
+  setKeyboardFormFactor: (formFactor: KeyboardFormFactor) => void;
 
   actionBarCtrlAltDel: boolean;
   setActionBarCtrlAltDel: (enabled: boolean) => void;
@@ -393,6 +481,18 @@ interface SettingsState {
 
   showPressedKeys: boolean;
   setShowPressedKeys: (show: boolean) => void;
+
+  // Swaps the Command (GUI) and Control modifier bits on the way out, so a key in
+  // the Control position sends Command to the host - what macOS users expect.
+  swapCommandControl: boolean;
+  setSwapCommandControl: (enabled: boolean) => void;
+
+  // Keeps the chords sent to the host from acting on this browser: Ctrl+S, Ctrl+P,
+  // zoom keys, wheel zoom and the like are cancelled while the keys are forwarded.
+  // Only chords the browser honours can be held back; combinations the operating
+  // system owns (Win, Cmd, Alt+Tab) still act locally.
+  isolateBrowserShortcuts: boolean;
+  setIsolateBrowserShortcuts: (enabled: boolean) => void;
 
   overrideCtrlV: boolean;
   setOverrideCtrlV: (enabled: boolean) => void;
@@ -415,6 +515,11 @@ interface SettingsState {
 
   forceHttp: boolean;
   setForceHttp: (enabled: boolean) => void;
+
+  // Mobile gesture toggle. Off means Zoom Lock: two fingers scroll the host
+  // instead of pinching the view scale.
+  touchGestureEnabled: boolean;
+  setTouchGestureEnabled: (enabled: boolean) => void;
 }
 
 export const useSettingsStore = create(
@@ -422,6 +527,9 @@ export const useSettingsStore = create(
     set => ({
       language: "en",
       setLanguage: language => set({ language }),
+
+      fullscreenMode: "page",
+      setFullscreenMode: mode => set({ fullscreenMode: mode }),
 
       isCursorHidden: false,
       setCursorVisibility: enabled => set({ isCursorHidden: enabled }),
@@ -440,12 +548,15 @@ export const useSettingsStore = create(
       setDisplayRotation: (rotation: string) => set({ displayRotation: rotation }),
 
       backlightSettings: {
-        max_brightness: 100,
+        max_brightness: 32,
         dim_after: 10000,
         off_after: 50000,
       },
       setBacklightSettings: (settings: BacklightSettings) =>
         set({ backlightSettings: settings }),
+
+      displayOn: true,
+      setDisplayOn: (on: boolean) => set({ displayOn: on }),
 
       timeZone: "CST-8",
       setTimeZone: (timezone: string) => set({ timeZone: timezone }),
@@ -459,10 +570,13 @@ export const useSettingsStore = create(
       keyboardLayout: "en-US",
       setKeyboardLayout: layout => set({ keyboardLayout: layout }),
 
+      keyboardFormFactor: "ANSI",
+      setKeyboardFormFactor: formFactor => set({ keyboardFormFactor: formFactor }),
+
       actionBarCtrlAltDel: false,
       setActionBarCtrlAltDel: enabled => set({ actionBarCtrlAltDel: enabled }),
 
-      keyboardLedSync: "auto",
+      keyboardLedSync: "host",
       setKeyboardLedSync: sync => set({ keyboardLedSync: sync }),
 
       scrollThrottling: 0,
@@ -476,6 +590,11 @@ export const useSettingsStore = create(
 
       showPressedKeys: true,
       setShowPressedKeys: show => set({ showPressedKeys: show }),
+
+      swapCommandControl: false,
+      setSwapCommandControl: enabled => set({ swapCommandControl: enabled }),
+      isolateBrowserShortcuts: true,
+      setIsolateBrowserShortcuts: enabled => set({ isolateBrowserShortcuts: enabled }),
 
       overrideCtrlV: false,
       setOverrideCtrlV: enabled => set({ overrideCtrlV: enabled }),
@@ -498,10 +617,24 @@ export const useSettingsStore = create(
 
       forceHttp: false,
       setForceHttp: enabled => set({ forceHttp: enabled }),
+      touchGestureEnabled: true,
+      setTouchGestureEnabled: enabled => set({ touchGestureEnabled: enabled }),
     }),
     {
       name: "settings",
       storage: createJSONStorage(() => localStorage),
+      // "auto" was a stored default that could never be picked in the UI. Now that
+      // the choice is explicit, profiles still carrying it land on host-only.
+      merge: (persisted, current) => {
+        const merged = { ...current, ...(persisted as Partial<SettingsState>) };
+        merged.keyboardLedSync = merged.keyboardLedSync === "browser" ? "browser" : "host";
+        // A profile written by an older build has no fullscreenMode at all.
+        merged.fullscreenMode = merged.fullscreenMode === "video" ? "video" : "page";
+        // The gesture toggle is a setup-once choice, so it belongs to the browser
+        // profile next to the other view preferences.
+        merged.touchGestureEnabled = merged.touchGestureEnabled !== false;
+        return merged;
+      },
     },
   ),
 );
@@ -556,12 +689,30 @@ export const useMountMediaStore = create<MountMediaState>(set => ({
   setErrorMessage: message => set({ errorMessage: message }),
 }));
 
+export const hidKeyBufferSize = 6;
+export const hidErrorRollOver = 0x01;
+
+export interface KeysDownState {
+  modifier: number;
+  keys: number[];
+}
+
 export interface KeyboardLedState {
   num_lock: boolean;
   caps_lock: boolean;
   scroll_lock: boolean;
   compose: boolean;
   kana: boolean;
+  // shift is not part of the main USB HID spec; the device reports it when the
+  // host lights bit 6. Older firmware never sends it.
+  shift?: boolean;
+  // reported tells "lights off" apart from "nobody has told us yet": the lamps
+  // render a grey question mark until something claims to know. Both the device
+  // LED report and the browser's own getModifierState set it, because either is
+  // a real answer for the mode in force. Switching the LED source therefore has
+  // to clear it (resetKeyboardLedTruth), otherwise a browser answer would
+  // survive into host mode and be drawn as if the host had reported it.
+  reported?: boolean;
 };
 const defaultKeyboardLedState: KeyboardLedState = {
   num_lock: false,
@@ -597,6 +748,9 @@ export interface HidState {
 
   keyboardLedStateSyncAvailable: boolean;
   setKeyboardLedStateSyncAvailable: (available: boolean) => void;
+  // Drops whatever the previous LED source told us, so the lamps go back to
+  // unknown instead of showing a value that belongs to a mode we left.
+  resetKeyboardLedTruth: () => void;
 
   keysDownState?: { modifier: number; keys: number[] };
   setKeysDownState: (state: { modifier: number; keys: number[] }) => void;
@@ -614,6 +768,17 @@ export interface HidState {
   
   isReinitializingGadget: boolean;
   setIsReinitializingGadget: (reinitializing: boolean) => void;
+
+  // Mirrors of the device side USB gadget functions. Input handlers read these
+  // to stop capturing keyboard/mouse traffic while the corresponding HID
+  // interface is not attached, which would otherwise keep failing or retrigger
+  // a gadget reinitialization.
+  usbEmulationEnabled: boolean;
+  setUsbEmulationEnabled: (enabled: boolean) => void;
+  usbKeyboardEnabled: boolean;
+  setUsbKeyboardEnabled: (enabled: boolean) => void;
+  usbMouseEnabled: boolean;
+  setUsbMouseEnabled: (enabled: boolean) => void;
 }
 
 export interface SerialState {
@@ -625,6 +790,28 @@ export const useSerialStore = create<SerialState>(set => ({
   isConnected: false,
   setIsConnected: connected => set({ isConnected: connected }),
 }));
+
+// Tapping the video to open the on-screen keyboard is a browser preference, not
+// device state: it belongs in localStorage so a reload keeps the choice without
+// writing anything to the device configuration.
+const TAP_KEYBOARD_STORAGE_KEY = "allow-tap-to-open-virtual-keyboard";
+
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw === null ? fallback : raw === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredBoolean(key: string, value: boolean) {
+  try {
+    window.localStorage.setItem(key, value ? "true" : "false");
+  } catch {
+    // Storage is unavailable in private mode; the toggle still works in memory.
+  }
+}
 
 export const useHidStore = create<HidState>((set, get) => ({
   activeKeys: [],
@@ -642,20 +829,32 @@ export const useHidStore = create<HidState>((set, get) => ({
   altGrCtrlTime: 0,
   setAltGrCtrlTime: time => set({ altGrCtrlTime: time }),
 
-  setKeyboardLedState: ledState => set({ keyboardLedState: ledState }),
+  setKeyboardLedState: ledState => {
+    // Device pushes and query responses cannot supply browser-mode truth.
+    if (useSettingsStore.getState().keyboardLedSync !== "host") return;
+    set({ keyboardLedState: ledState });
+  },
   setIsNumLockActive: active => {
+    if (useSettingsStore.getState().keyboardLedSync !== "browser") return;
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.num_lock = active;
+    // The browser now holds local truth for the lamps, so stop rendering them as
+    // unknown. This is the browser-managed path only; host mode never gets here.
+    keyboardLedState.reported = true;
     set({ keyboardLedState });
   },
   setIsCapsLockActive: active => {
+    if (useSettingsStore.getState().keyboardLedSync !== "browser") return;
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.caps_lock = active;
+    keyboardLedState.reported = true;
     set({ keyboardLedState });
   },
   setIsScrollLockActive: active => {
+    if (useSettingsStore.getState().keyboardLedSync !== "browser") return;
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.scroll_lock = active;
+    keyboardLedState.reported = true;
     set({ keyboardLedState });
   },
 
@@ -664,11 +863,23 @@ export const useHidStore = create<HidState>((set, get) => ({
 
   keyboardLedStateSyncAvailable: false,
   setKeyboardLedStateSyncAvailable: available => set({ keyboardLedStateSyncAvailable: available }),
+  resetKeyboardLedTruth: () =>
+    set({
+      keyboardLedState: { ...defaultKeyboardLedState },
+      keyboardLedStateSyncAvailable: false,
+    }),
 
   isVirtualKeyboardEnabled: false,
-  setVirtualKeyboardEnabled: enabled => set({ isVirtualKeyboardEnabled: enabled }),
-  allowTapToOpenVirtualKeyboard: true,
-  setAllowTapToOpenVirtualKeyboard: enabled => set({ allowTapToOpenVirtualKeyboard: enabled }),
+  setVirtualKeyboardEnabled: enabled => {
+    // Hiding the keyboard must not let the same tap reach the video and reopen it.
+    if (!enabled) suppressKeyboardTap();
+    set({ isVirtualKeyboardEnabled: enabled });
+  },
+  allowTapToOpenVirtualKeyboard: readStoredBoolean(TAP_KEYBOARD_STORAGE_KEY, true),
+  setAllowTapToOpenVirtualKeyboard: enabled => {
+    writeStoredBoolean(TAP_KEYBOARD_STORAGE_KEY, enabled);
+    set({ allowTapToOpenVirtualKeyboard: enabled });
+  },
 
   isPasteModeEnabled: false,
   setPasteModeEnabled: enabled => set({ isPasteModeEnabled: enabled }),
@@ -679,6 +890,15 @@ export const useHidStore = create<HidState>((set, get) => ({
   
   isReinitializingGadget: false,
   setIsReinitializingGadget: reinitializing => set({ isReinitializingGadget: reinitializing }),
+
+  // Default to enabled: until the device reports otherwise, input has to keep
+  // working exactly as before.
+  usbEmulationEnabled: true,
+  setUsbEmulationEnabled: enabled => set({ usbEmulationEnabled: enabled }),
+  usbKeyboardEnabled: true,
+  setUsbKeyboardEnabled: enabled => set({ usbKeyboardEnabled: enabled }),
+  usbMouseEnabled: true,
+  setUsbMouseEnabled: enabled => set({ usbMouseEnabled: enabled }),
 }));
 
 
@@ -968,6 +1188,11 @@ export interface IPv4StaticConfig {
   dns?: string[];
 }
 
+export interface TimeSyncCustomServer {
+  server: string;
+  enabled: boolean;
+}
+
 export interface NetworkSettings {
   hostname: string;
   domain: string;
@@ -982,6 +1207,10 @@ export interface NetworkSettings {
   lldp_tx_tlvs: string[];
   mdns_mode: mDNSMode;
   time_sync_mode: TimeSyncMode;
+  time_sync_ntp_servers?: string[];
+  time_sync_http_urls?: string[];
+  time_sync_ntp_custom?: TimeSyncCustomServer[];
+  time_sync_http_custom?: TimeSyncCustomServer[];
   pending_reboot?: boolean;
 }
 
@@ -1168,6 +1397,21 @@ export const useMacrosStore = create<MacrosState>((set, get) => ({
   },
 }));
 
+// The device exposes every overlay network through its own RPC: TailScale and
+// ZeroTier answer with a settings object, NetBird with a status object, and the
+// rest with nothing but `{ running: bool }`. Rather than mirror six
+// near-identical field triplets in this store, the flag-only tunnels share one
+// generic map that the Remote drawer refreshes while it is open.
+export type TunnelKey = "netbird" | "wireguard" | "easytier" | "vnt" | "frpc" | "cloudflared";
+
+export interface TunnelEntry {
+  up: boolean;
+  /** Same vocabulary as STATE_LABEL in RemoteStatusPanel.tsx. */
+  state: string;
+  /** Address or reason worth showing instead of the state label. */
+  detail?: string;
+}
+
 export interface VpnState {
   tailScaleConnectionState: "connecting" | "connected" | "disconnected" | "closed" | "logined";
   setTailScaleConnectionState: (state: VpnState["tailScaleConnectionState"]) => void;
@@ -1189,6 +1433,9 @@ export interface VpnState {
   
   zeroTierIP: string | null;
   setZeroTierIP: (ip: string) => void;
+
+  tunnelEntries: Partial<Record<TunnelKey, TunnelEntry>>;
+  setTunnelEntry: (key: TunnelKey, entry: TunnelEntry) => void;
 };
 
 export const useVpnStore = create<VpnState>(set => ({
@@ -1207,6 +1454,10 @@ export const useVpnStore = create<VpnState>(set => ({
   setZeroTierNetworkID: networkID => set({ zeroTierNetworkID: networkID }),
   zeroTierIP: null,
   setZeroTierIP: networkID => set({ zeroTierIP: networkID }),
+
+  tunnelEntries: {},
+  setTunnelEntry: (key, entry) =>
+    set(state => ({ tunnelEntries: { ...state.tunnelEntries, [key]: entry } })),
 }));
 
 export interface MacrosSideState {

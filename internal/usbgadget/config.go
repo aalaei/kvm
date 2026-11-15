@@ -64,6 +64,8 @@ var defaultGadgetConfig = map[string]gadgetConfigItem{
 	"absolute_mouse": absoluteMouseConfig,
 	// relative mouse HID
 	"relative_mouse": relativeMouseConfig,
+	// pen and touch screen HID
+	"pen_touch": penTouchConfig,
 	// mass storage
 	"mass_storage_base": massStorageBaseConfig,
 	"mass_storage_lun0": massStorageLun0Config,
@@ -92,6 +94,8 @@ func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
 		return u.enabledDevices.AbsoluteMouse
 	case "relative_mouse":
 		return u.enabledDevices.RelativeMouse
+	case "pen_touch":
+		return u.enabledDevices.AbsoluteMouse
 	case "keyboard":
 		return u.enabledDevices.Keyboard
 	case "mass_storage_base":
@@ -105,6 +109,32 @@ func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
 	default:
 		return true
 	}
+}
+
+// hidFunctionOrder lists the HID functions in creation order. The kernel numbers
+// /dev/hidgN nodes by that order, not by the hid.usbN suffix in the function name,
+// so a disabled keyboard shifts both mouse nodes down by one.
+//
+// pen_touch stays last: appending it keeps the existing keyboard/absolute_mouse/
+// relative_mouse at hidg0/hidg1/hidg2 when all of them are enabled.
+var hidFunctionOrder = []string{"keyboard", "absolute_mouse", "relative_mouse", "pen_touch"}
+
+// HidgNodePath returns the /dev/hidgN node backing one HID function. These paths
+// must not be hardcoded: as soon as a function is switched off the nodes are
+// renumbered, and an absolute-mouse report written to the relative-mouse node gets
+// decoded with a different report descriptor - which the host turns into stray
+// clicks and a cursor that only moves on one axis.
+func (u *UsbGadget) HidgNodePath(itemKey string) string {
+	index := 0
+	for _, key := range hidFunctionOrder {
+		if key == itemKey {
+			break
+		}
+		if u.isGadgetConfigItemEnabled(key) {
+			index++
+		}
+	}
+	return fmt.Sprintf("/dev/hidg%d", index)
 }
 
 func (u *UsbGadget) loadGadgetConfig() {
@@ -326,21 +356,23 @@ func (u *UsbGadget) configureUsbGadget(resetUsb bool) error {
 		Bool("reset_usb", resetUsb).
 		Msg("configuring USB gadget via transaction")
 
-	return u.WithTransaction(func() error {
-		u.log.Info().Msg("Transaction: Mounting configfs")
-		u.tx.MountConfigFS()
+	return u.withHIDRebind(func() error {
+		return u.WithTransaction(func() error {
+			u.log.Info().Msg("Transaction: Mounting configfs")
+			u.tx.MountConfigFS()
 
-		u.log.Info().Msg("Transaction: Creating config path")
-		u.tx.CreateConfigPath()
+			u.log.Info().Msg("Transaction: Creating config path")
+			u.tx.CreateConfigPath()
 
-		u.log.Info().Msg("Transaction: Writing gadget configuration")
-		u.tx.WriteGadgetConfig()
+			u.log.Info().Msg("Transaction: Writing gadget configuration")
+			u.tx.WriteGadgetConfig()
 
-		if resetUsb {
-			u.log.Info().Msg("Transaction: Rebinding USB")
-			u.tx.RebindUsb(true)
-		}
-		return nil
+			if resetUsb {
+				u.log.Info().Msg("Transaction: Rebinding USB")
+				u.tx.RebindUsb(true)
+			}
+			return nil
+		})
 	})
 }
 

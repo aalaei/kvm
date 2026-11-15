@@ -89,23 +89,29 @@ func (m *KeyboardMacro) Validate() error {
 }
 
 type Config struct {
-	STUN                       string                 `json:"stun"`
-	TurnServers                []TurnServer           `json:"turn_servers"`
-	JigglerEnabled             bool                   `json:"jiggler_enabled"`
-	UpdateDownloadProxy        string                 `json:"update_download_proxy"`
-	HashedPassword             string                 `json:"hashed_password"`
-	LocalAuthToken             string                 `json:"local_auth_token"`
-	LocalAuthMode              string                 `json:"localAuthMode"` // TODO: fix it with migration
-	LocalLoopbackOnly          bool                   `json:"local_loopback_only"`
-	UsbEnhancedDetection       bool                   `json:"usb_enhanced_detection"`
-	WakeOnLanDevices           []WakeOnLanDevice      `json:"wake_on_lan_devices"`
-	KeyboardMacros             []KeyboardMacro        `json:"keyboard_macros"`
-	KeyboardLayout             string                 `json:"keyboard_layout"`
-	EdidString                 string                 `json:"hdmi_edid_string"`
-	ForceHpd                   bool                   `json:"force_hpd"`
-	ActiveExtension            string                 `json:"active_extension"`
-	DisplayRotation            string                 `json:"display_rotation"`
-	DisplayMaxBrightness       int                    `json:"display_max_brightness"`
+	STUN                 string            `json:"stun"`
+	TurnServers          []TurnServer      `json:"turn_servers"`
+	JigglerEnabled       bool              `json:"jiggler_enabled"`
+	UpdateDownloadProxy  string            `json:"update_download_proxy"`
+	HashedPassword       string            `json:"hashed_password"`
+	LocalAuthToken       string            `json:"local_auth_token"`
+	LocalAuthMode        string            `json:"localAuthMode"` // TODO: fix it with migration
+	LocalLoopbackOnly    bool              `json:"local_loopback_only"`
+	UsbEnhancedDetection bool              `json:"usb_enhanced_detection"`
+	WakeOnLanDevices     []WakeOnLanDevice `json:"wake_on_lan_devices"`
+	KeyboardMacros       []KeyboardMacro   `json:"keyboard_macros"`
+	KeyboardLayout       string            `json:"keyboard_layout"`
+	// KeyboardFormFactor is the physical key arrangement the on-screen keyboard
+	// mirrors: ANSI (US), ISO (Europe) or JIS (Japan). It is independent of
+	// KeyboardLayout, which selects the character mapping of a language.
+	KeyboardFormFactor string `json:"keyboard_form_factor"`
+	EdidString         string `json:"hdmi_edid_string"`
+	ForceHpd           bool   `json:"force_hpd"`
+	ActiveExtension    string `json:"active_extension"`
+	DisplayRotation    string `json:"display_rotation"`
+	// DisplayBrightnessPercent is the backlight percentage (0-100), the same unit the
+	// touchscreen slider and the web UI slider use.
+	DisplayBrightnessPercent   int                    `json:"display_brightness_percent"`
 	DisplayDimAfterSec         int                    `json:"display_dim_after_sec"`
 	DisplayOffAfterSec         int                    `json:"display_off_after_sec"`
 	TLSMode                    string                 `json:"tls_mode"` // options: "self-signed", "user-defined", ""
@@ -132,7 +138,7 @@ type Config struct {
 	TimeZone                   string                 `json:"time_zone"`
 	LEDGreenMode               string                 `json:"led_green_mode"`
 	LEDYellowMode              string                 `json:"led_yellow_mode"`
-	AutoMountImage             *AutoMountImageConfig  `json:"auto_mount_image,omitempty"`
+	AutoMountImage             *AutoMountImageConfig  `json:"auto_mount_image"`
 	EasytierAutoStart          bool                   `json:"easytier_autostart"`
 	EasytierConfig             EasytierConfig         `json:"easytier_config"`
 	VntAutoStart               bool                   `json:"vnt_autostart"`
@@ -143,12 +149,34 @@ type Config struct {
 	NetbirdManagementURL       string                 `json:"netbird_management_url"`
 	NpuAppEnabled              bool                   `json:"npu_app_enabled"`
 	Firewall                   *FirewallConfig        `json:"firewall"`
-	APIKey                     string                 `json:"api_key"`
+	APIKey                     string                 `json:"api_key"`                // MCP-only API key, used by mcp.go
+	MCPDisabled                bool                   `json:"mcp_disabled,omitempty"` // MCP server off; the zero value keeps it enabled for existing configs
 	PersistedVirtualMediaState *VirtualMediaState     `json:"persisted_virtual_media_state,omitempty"`
 	SerialBaudRate             int                    `json:"serial_baud_rate,omitempty"`
 	SerialDataBits             int                    `json:"serial_data_bits,omitempty"`
-	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"` // "1", "1.5", "2"
-	SerialParity               string                 `json:"serial_parity,omitempty"`    // "none", "odd", "even", "mark", "space"
+	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"`    // "1", "1.5", "2"
+	SerialParity               string                 `json:"serial_parity,omitempty"`       // "none", "odd", "even", "mark", "space"
+	SerialPortEnabled          bool                   `json:"serial_port_enabled,omitempty"` // user intent: keep the serial port open across reloads and reboots
+	// MobileVirtualMouse holds the mobile virtual mouse overlay layout so the
+	// widget positions survive reloads and are shared by every browser.
+	MobileVirtualMouse *MobileVirtualMouseConfig `json:"mobile_virtual_mouse,omitempty"`
+}
+
+// MobileVirtualMouseConfig is the persisted virtual mouse overlay layout.
+type MobileVirtualMouseConfig struct {
+	Enabled bool                                `json:"enabled"` // master switch: show the widgets at all
+	Speed   float64                             `json:"speed"`   // joystick speed multiplier
+	Widgets map[string]MobileVirtualMouseWidget `json:"widgets"`
+}
+
+// MobileVirtualMouseWidget is one widget's placement and appearance. Positions
+// are fractions of the overlay area so the layout survives any screen size.
+type MobileVirtualMouseWidget struct {
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Scale   float64 `json:"scale"`
+	Opacity float64 `json:"opacity"`
+	Enabled bool    `json:"enabled"`
 }
 
 type AutoMountImageConfig struct {
@@ -215,19 +243,20 @@ const (
 var builtOtaPublicKey = ""
 
 var defaultConfig = &Config{
-	STUN:                 "stun:stun.l.google.com:19302",
-	TurnServers:          []TurnServer{},
-	ActiveExtension:      "",
-	KeyboardMacros:       []KeyboardMacro{},
-	DisplayRotation:      "180",
-	TimeZone:             "UTC-8",
-	KeyboardLayout:       "en_US",
-	DisplayMaxBrightness: 64,
-	DisplayDimAfterSec:   120,  // 2 minutes
-	DisplayOffAfterSec:   1800, // 30 minutes
-	TLSMode:              "",
-	ForceHpd:             false,
-	UsbEnhancedDetection: true,
+	STUN:                     "stun:stun.l.google.com:19302",
+	TurnServers:              []TurnServer{},
+	ActiveExtension:          "",
+	KeyboardMacros:           []KeyboardMacro{},
+	DisplayRotation:          "180",
+	TimeZone:                 "UTC-8",
+	KeyboardLayout:           "en_US",
+	KeyboardFormFactor:       "ANSI",
+	DisplayBrightnessPercent: 32,
+	DisplayDimAfterSec:       120,  // 2 minutes
+	DisplayOffAfterSec:       1800, // 30 minutes
+	TLSMode:                  "",
+	ForceHpd:                 false,
+	UsbEnhancedDetection:     true,
 	UsbConfig: &usbgadget.Config{
 		VendorId:     "0x1d6b", // The Linux Foundation
 		ProductId:    "0x0104", // Multifunction Composite Gadget
@@ -257,7 +286,7 @@ var defaultConfig = &Config{
 	AudioRateFactor:      0.9596,
 	LEDGreenMode:         "network-rx",
 	LEDYellowMode:        "kernel-activity",
-	AutoMountImage:       &AutoMountImageConfig{Filename: "system_info.img", Source: "kvm"},
+	AutoMountImage:       &AutoMountImageConfig{Filename: systemInfoImageFilename, Source: "kvm"},
 	WireguardAutoStart:   false,
 	NpuAppEnabled:        false,
 	Firewall: &FirewallConfig{
@@ -280,6 +309,80 @@ type ConfigMigrationFunc func(raw json.RawMessage) (json.RawMessage, error)
 
 var configMigrations = []ConfigMigrationFunc{
 	migrateLocalAuthMode,
+	migrateDisplayBrightnessPercent,
+	migrateLegacyTruncatedEdid,
+}
+
+// migrateLegacyTruncatedEdid replaces the legacy 128-byte default EDID (base
+// block only, while byte 126 still announced one extension block) with the full
+// 256-byte default. A custom EDID set by the user is left untouched.
+func migrateLegacyTruncatedEdid(raw json.RawMessage) (json.RawMessage, error) {
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return nil, fmt.Errorf("migrateLegacyTruncatedEdid: failed to parse config JSON: %w", err)
+	}
+
+	edidRaw, exists := rawMap["hdmi_edid_string"]
+	if !exists {
+		return json.Marshal(rawMap)
+	}
+
+	var edid string
+	if err := json.Unmarshal(edidRaw, &edid); err != nil {
+		return nil, fmt.Errorf("migrateLegacyTruncatedEdid: failed to parse hdmi_edid_string: %w", err)
+	}
+	if !strings.EqualFold(edid, legacyTruncatedEdidHex) {
+		return json.Marshal(rawMap)
+	}
+
+	encoded, err := json.Marshal(defaultEdidHex)
+	if err != nil {
+		return nil, fmt.Errorf("migrateLegacyTruncatedEdid: failed to encode default EDID: %w", err)
+	}
+	rawMap["hdmi_edid_string"] = encoded
+	return json.Marshal(rawMap)
+}
+
+// migrateDisplayBrightnessPercent replaces the legacy raw backlight level
+// (display_max_brightness, 0-200) with a percentage (display_brightness_percent),
+// so the web UI, the touchscreen slider and the config all share one unit.
+func migrateDisplayBrightnessPercent(raw json.RawMessage) (json.RawMessage, error) {
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return nil, fmt.Errorf("migrateDisplayBrightnessPercent: failed to parse config JSON: %w", err)
+	}
+
+	if _, exists := rawMap["display_brightness_percent"]; exists {
+		delete(rawMap, "display_max_brightness")
+		return json.Marshal(rawMap)
+	}
+
+	percent := defaultConfig.DisplayBrightnessPercent
+	if levelRaw, exists := rawMap["display_max_brightness"]; exists {
+		var level int
+		if err := json.Unmarshal(levelRaw, &level); err == nil {
+			percent = displayBacklightPercent(level)
+		}
+		delete(rawMap, "display_max_brightness")
+	}
+
+	// The darkest slider position is backlightMinPercent, a legacy "0" level
+	// would leave the panel dark with no way to bring it back from the UI.
+	if percent < backlightMinPercent {
+		percent = backlightMinPercent
+	}
+
+	percentRaw, err := json.Marshal(percent)
+	if err != nil {
+		return nil, fmt.Errorf("migrateDisplayBrightnessPercent: failed to marshal percent: %w", err)
+	}
+	rawMap["display_brightness_percent"] = percentRaw
+
+	result, err := json.Marshal(rawMap)
+	if err != nil {
+		return nil, fmt.Errorf("migrateDisplayBrightnessPercent: failed to marshal migrated config: %w", err)
+	}
+	return result, nil
 }
 
 func migrateLocalAuthMode(raw json.RawMessage) (json.RawMessage, error) {
@@ -518,12 +621,16 @@ func SaveConfig() error {
 	return nil
 }
 
+// apiKeyPrefix marks MCP API keys so a leaked key is recognizable on sight.
+// Keys generated before this prefix existed stay valid as they are.
+const apiKeyPrefix = "lfk_mcp_"
+
 func generateAPIKey() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(bytes), nil
+	return apiKeyPrefix + hex.EncodeToString(bytes), nil
 }
 
 func ensureConfigLoaded() {
@@ -534,12 +641,16 @@ func ensureConfigLoaded() {
 
 var systemInfoWriteLock sync.Mutex
 
+// systemInfoImageFilename is the image auto-mounted by default. Kept in one place
+// because the auto-mount logic and the image writer must agree on the name.
+const systemInfoImageFilename = "system_info.img"
+
 func writeSystemInfoImg() error {
 	systemInfoWriteLock.Lock()
 	defer systemInfoWriteLock.Unlock()
 
-	imgPath := filepath.Join(imagesFolder, "system_info.img")
-	unverifiedimgPath := filepath.Join(imagesFolder, "system_info.img") + ".unverified"
+	imgPath := filepath.Join(imagesFolder, systemInfoImageFilename)
+	unverifiedimgPath := imgPath + ".unverified"
 	mountPoint := "/mnt/system_info"
 
 	run := func(cmd string, args ...string) error {

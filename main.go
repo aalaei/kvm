@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/gwatts/rootcerts"
+	"kvm/internal/mcp"
 )
 
 var appCtx context.Context
@@ -33,6 +34,10 @@ func Main() {
 		}
 	}
 
+	// Seed the MCP live state early: the server itself starts in a goroutine, but
+	// the management API can be queried before that.
+	initMCP()
+
 	var cancel context.CancelFunc
 	appCtx, cancel = context.WithCancel(context.Background())
 	defer cancel()
@@ -50,7 +55,6 @@ func Main() {
 		Interface("app_version", appVersionLocal).
 		Msg("starting KVM")
 
-	go watchAdcKeysLongPressReset(appCtx)
 	go runWatchdog()
 	go confirmCurrentSystem() //A/B system
 	if isNewEnoughSystem {
@@ -183,13 +187,13 @@ func Main() {
 
 	go RunWebServer()
 
-	// API and MCP services temporarily disabled for debugging
+	// Local CLI API (unix socket, no auth) and the MCP server (API key auth)
 	go func() {
-		StartAPIServer(8080)
+		StartAPIServer(cliAPISocketPath)
 	}()
 
 	go func() {
-		StartMCP(8081, false)
+		mcp.Start(mcp.DefaultPort, false)
 	}()
 
 	go RunWebSecureServer()

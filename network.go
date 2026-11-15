@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"kvm/internal/network"
+	"kvm/internal/timesync"
 	"kvm/internal/udhcpc"
 
 	"github.com/guregu/null/v6"
@@ -156,11 +157,28 @@ func rpcSetNetworkSettings(settings network.RpcNetworkSettings) (*network.RpcNet
 	}
 	applyProxyEnvironment(config.NetworkConfig)
 
+	// refresh time sync server lists so custom servers take effect immediately
+	if timeSync != nil {
+		timeSync.SetNetworkConfig(config.NetworkConfig)
+	}
+
 	return &network.RpcNetworkSettings{NetworkConfig: *config.NetworkConfig}, nil
+}
+
+func rpcGetTimeSyncServers() map[string]interface{} {
+	return map[string]interface{}{
+		"ntp":  timesync.DefaultNTPServers(),
+		"http": timesync.DefaultHTTPUrls(),
+	}
 }
 
 func rpcRenewDHCPLease() error {
 	return networkState.RpcRenewDHCPLease()
+}
+
+// rpcRestartDHCPClient drops the current lease and runs a fresh DHCP discover.
+func rpcRestartDHCPClient() error {
+	return networkState.RpcRestartDHCPClient()
 }
 
 func rpcRequestDHCPAddress(ip string) error {

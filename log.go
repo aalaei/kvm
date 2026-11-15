@@ -29,7 +29,7 @@ var (
 	displayLogger   = logging.GetSubsystemLogger("display")
 	wolLogger       = logging.GetSubsystemLogger("wol")
 	usbLogger       = logging.GetSubsystemLogger("usb")
-	keysLogger      = logging.GetSubsystemLogger("keys")
+	hidRPCLogger    = logging.GetSubsystemLogger("hidrpc")
 	// external components
 	ginLogger = logging.GetSubsystemLogger("gin")
 )
