@@ -963,8 +963,16 @@ func rpcGetWireguardInfo() (string, error) {
 }
 
 func initVPN() {
-	waitVpnCtrlClientConnected()
+	// Don't let a missing or crashed kvm_vpn block startup (the web server is
+	// started after this). Wait briefly so the normal boot order is kept, then
+	// finish VPN init in the background whenever kvm_vpn connects.
+	select {
+	case <-vpnCtrlClientConnected:
+	case <-time.After(30 * time.Second):
+		vpnLogger.Warn().Msg("kvm_vpn not connected after 30s, continuing startup; VPN init deferred")
+	}
 	go func() {
+		waitVpnCtrlClientConnected()
 		for {
 			if !networkState.IsOnline() {
 				vpnLogger.Warn().Msg("waiting for network to be online, will retry in 3 seconds")

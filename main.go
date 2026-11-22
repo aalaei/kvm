@@ -207,6 +207,10 @@ func Main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	<-sigs
 	logger.Info().Msg("KVM Shutting Down")
+	// Cancel appCtx so runWatchdog disarms /dev/watchdog with 'V' before we
+	// exit; otherwise the kernel watchdog reboots the device ~10s later.
+	cancel()
+	time.Sleep(500 * time.Millisecond)
 	//if fuseServer != nil {
 	//	err := setMassStorageImage(" ")
 	//	if err != nil {
