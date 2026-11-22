@@ -107,6 +107,9 @@ func (u *UsbGadget) logWithSuppression(counterName string, every int, logger *ze
 }
 
 func (u *UsbGadget) resetLogSuppressionCounter(counterName string) {
+	u.logLock.Lock()
+	defer u.logLock.Unlock()
+
 	if _, ok := u.logSuppressionCounter[counterName]; !ok {
 		u.logSuppressionCounter[counterName] = 0
 	}
